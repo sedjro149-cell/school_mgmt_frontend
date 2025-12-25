@@ -1,527 +1,381 @@
-// src/pages/Parents.jsx
-import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import {
   FaSearch,
   FaSyncAlt,
   FaPlus,
   FaEdit,
   FaTrash,
+  FaPhone,
+  FaEnvelope,
+  FaUserTie,
   FaChevronDown,
   FaChevronUp,
+  FaTimes,
+  FaCheck,
+  FaGraduationCap,
+  FaIdBadge
 } from "react-icons/fa";
 import { fetchData, postData, patchData, deleteData } from "./api";
 
-/* Small helpers / components */
-const Skeleton = ({ lines = 6 }) => (
-  <div className="space-y-3 animate-pulse">
-    {Array.from({ length: lines }).map((_, i) => (
-      <div key={i} className="h-10 bg-gray-200 rounded-lg" />
-    ))}
-  </div>
-);
+/* --- HELPERS --- */
+const getFullName = (obj) => {
+  if (!obj) return "—";
+  if (obj.user) {
+    const f = obj.user.first_name || obj.user.firstname || "";
+    const l = obj.user.last_name || obj.user.lastname || "";
+    if (f || l) return `${f} ${l}`.trim();
+    return obj.user.username || "Utilisateur";
+  }
+  const f = obj.first_name || obj.firstname || "";
+  const l = obj.last_name || obj.lastname || "";
+  if (f || l) return `${f} ${l}`.trim();
+  return obj.username || "—";
+};
 
-const EmptyState = ({ title = "Rien ici", subtitle = "" }) => (
-  <div className="flex items-center justify-center flex-col gap-4 py-12 text-center text-gray-500">
-    <svg width="96" height="72" viewBox="0 0 96 72" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="6" y="10" width="84" height="52" rx="8" stroke="#E5E7EB" strokeWidth="2" fill="#FFFFFF"/>
-      <rect x="18" y="22" width="60" height="6" rx="3" fill="#EEF2FF"/>
-      <rect x="18" y="34" width="36" height="6" rx="3" fill="#EEF2FF"/>
-      <rect x="18" y="46" width="28" height="6" rx="3" fill="#EEF2FF"/>
-    </svg>
-    <div className="text-lg font-semibold text-gray-800">{title}</div>
-    {subtitle && <div className="text-sm text-gray-500">{subtitle}</div>}
-  </div>
-);
+/* --- COMPONENTS --- */
+const Avatar = ({ name }) => {
+  const initials = (name || "?").split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase();
+  return (
+    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white flex items-center justify-center font-bold text-xs shadow-sm ring-2 ring-white shrink-0">
+      {initials}
+    </div>
+  );
+};
 
-const Parents = () => {
-  // data
+const Modal = ({ isOpen, onClose, title, children }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden max-h-[90vh]">
+        <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+          <h3 className="text-lg font-bold text-slate-800">{title}</h3>
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition"><FaTimes /></button>
+        </div>
+        <div className="p-6 overflow-y-auto custom-scrollbar">{children}</div>
+      </div>
+    </div>
+  );
+};
+
+export default function Parents() {
+  /* --- STATE --- */
   const [parents, setParents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  // UI state
+  
+  // UI
   const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [expandedId, setExpandedId] = useState(null); // Pour l'accordéon
   const [showModal, setShowModal] = useState(false);
   const [currentParent, setCurrentParent] = useState(null);
-  const [expandedParent, setExpandedParent] = useState(null);
-  const [viewMode, setViewMode] = useState("table"); // "table" or "cards"
+  
+  // Pagination
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(10);
 
-  // form
-  const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [password, setPassword] = useState("");
+  // Form
+  const [formData, setFormData] = useState({ username: "", email: "", firstName: "", lastName: "", phone: "", password: "" });
   const [formErrors, setFormErrors] = useState({});
 
-  // pagination
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(12);
-
-  const firstInputRef = useRef(null);
-
+  /* --- FETCH --- */
   const fetchParents = useCallback(async () => {
     setLoading(true);
-    setError("");
     try {
       const data = await fetchData("/core/admin/parents/");
-      const list = Array.isArray(data) ? data : data?.results ?? [];
-      setParents(list);
-    } catch (err) {
-      console.error("fetchParents error:", err?.body ?? err?.message ?? err);
-      setError(err?.status === 401 ? "Non autorisé — connectez-vous." : "Erreur lors de la récupération des parents.");
-    } finally {
-      setLoading(false);
-    }
+      setParents(Array.isArray(data) ? data : data?.results ?? []);
+    } catch (err) { console.error(err); } 
+    finally { setLoading(false); }
   }, []);
 
-  useEffect(() => {
-    fetchParents();
-  }, [fetchParents]);
+  useEffect(() => { fetchParents(); }, [fetchParents]);
 
-  /* debounce query */
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedQuery(query.trim().toLowerCase()), 300);
-    return () => clearTimeout(t);
-  }, [query]);
+  /* --- LOGIC --- */
+  const toggleExpand = (id) => setExpandedId(expandedId === id ? null : id);
 
-  /* filtering */
   const filtered = useMemo(() => {
-    if (!debouncedQuery) return parents;
-    const q = debouncedQuery;
-    return parents.filter((p) => {
-      const usernameVal = (p?.user?.username ?? p?.username ?? "").toLowerCase();
-      const emailVal = (p?.user?.email ?? p?.email ?? "").toLowerCase();
-      const first = (p?.user?.first_name ?? p?.first_name ?? "").toLowerCase();
-      const last = (p?.user?.last_name ?? p?.last_name ?? "").toLowerCase();
-      return usernameVal.includes(q) || emailVal.includes(q) || first.includes(q) || last.includes(q);
+    const q = query.toLowerCase().trim();
+    if (!q) return parents;
+    return parents.filter(p => {
+      const name = getFullName(p).toLowerCase();
+      const meta = [p?.user?.email, p?.phone, p?.user?.username].join(" ").toLowerCase();
+      return name.includes(q) || meta.includes(q);
     });
-  }, [parents, debouncedQuery]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [totalPages, page]);
+  }, [parents, query]);
 
   const pageData = useMemo(() => {
     const start = (page - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
   }, [filtered, page, pageSize]);
 
-  /* form helpers */
-  const resetForm = () => {
-    setCurrentParent(null);
-    setUsername("");
-    setEmail("");
-    setFirstName("");
-    setLastName("");
-    setPhone("");
-    setPassword("");
-    setFormErrors({});
-  };
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
 
-  const openCreateModal = () => {
-    resetForm();
-    setShowModal(true);
-  };
-
-  const openEditModal = (p) => {
-    resetForm();
+  /* --- ACTIONS --- */
+  const openModal = (p = null) => {
     setCurrentParent(p);
-    setUsername(p?.user?.username ?? p?.username ?? "");
-    setEmail(p?.user?.email ?? p?.email ?? "");
-    setFirstName(p?.user?.first_name ?? p?.first_name ?? "");
-    setLastName(p?.user?.last_name ?? p?.last_name ?? "");
-    setPhone(p?.phone ?? "");
-    setShowModal(true);
-  };
-
-  const closeModal = () => {
-    setShowModal(false);
-    setCurrentParent(null);
+    setFormData({
+      username: p?.user?.username ?? p?.username ?? "",
+      email: p?.user?.email ?? p?.email ?? "",
+      firstName: p?.user?.first_name ?? p?.first_name ?? "",
+      lastName: p?.user?.last_name ?? p?.last_name ?? "",
+      phone: p?.phone ?? "",
+      password: ""
+    });
     setFormErrors({});
-  };
-
-  useEffect(() => {
-    if (showModal && firstInputRef.current) {
-      firstInputRef.current.focus();
-    }
-  }, [showModal]);
-
-  // close modal on Escape
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === "Escape" && showModal) closeModal();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [showModal]);
-
-  const validateForm = () => {
-    const errs = {};
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errs.email = "Email invalide";
-    if (!firstName) errs.firstName = "Prénom requis";
-    if (!lastName) errs.lastName = "Nom requis";
-    if (!currentParent && !username) errs.username = "Username requis";
-    if (!currentParent && !password) errs.password = "Mot de passe requis";
-    setFormErrors(errs);
-    return Object.keys(errs).length === 0;
+    setShowModal(true);
   };
 
   const handleSubmit = async () => {
-    if (!validateForm()) return;
+    setFormErrors({});
+    if (!formData.firstName || !formData.lastName) return setFormErrors({ global: "Nom et Prénom requis" });
+
     setSaving(true);
     try {
+      const userPayload = { email: formData.email, first_name: formData.firstName, last_name: formData.lastName };
+      if (formData.password) userPayload.password = formData.password;
+      
+      const payload = { 
+         user: { ...userPayload, username: formData.username || `${formData.firstName}.${formData.lastName}`.toLowerCase() }, 
+         phone: formData.phone || null 
+      };
+
       if (currentParent) {
-        const userPayload = { email, first_name: firstName, last_name: lastName };
-        if (password) userPayload.password = password;
-        const payload = { user: userPayload, phone: phone || null };
-        // using PUT helper for updates (api.js doesn't expose patch by default)
-        await patchData(`/core/admin/parents/${currentParent.id}/`, payload);
-        await fetchParents();
-        closeModal();
+        await patchData(`/core/admin/parents/${currentParent.id}/`, { user: userPayload, phone: formData.phone });
       } else {
-        const payload = {
-          user: { username, email, password, first_name: firstName, last_name: lastName },
-          phone: phone || null,
-        };
         await postData("/core/admin/parents/", payload);
-        await fetchParents();
-        closeModal();
       }
-    } catch (err) {
-      console.error("submit parent error:", err?.body ?? err?.message ?? err);
-      const resp = err?.body ?? null;
-      if (resp && typeof resp === "object") {
-        const msg = Object.entries(resp).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`).join(" | ");
-        setFormErrors({ submit: msg });
-      } else {
-        setFormErrors({ submit: "Erreur lors de l'envoi. Voir console." });
-      }
-    } finally {
-      setSaving(false);
-    }
+      await fetchParents();
+      setShowModal(false);
+    } catch (err) { alert("Erreur lors de l'enregistrement."); } 
+    finally { setSaving(false); }
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Voulez-vous vraiment supprimer ce parent ? Cette action est irréversible.")) return;
-    try {
-      await deleteData(`/core/admin/parents/${id}/`);
-      await fetchParents();
-    } catch (err) {
-      console.error("delete parent error:", err?.body ?? err?.message ?? err);
-      alert("Erreur lors de la suppression. Voir console.");
+    if (window.confirm("Supprimer ce parent ?")) {
+      try { await deleteData(`/core/admin/parents/${id}/`); fetchParents(); } catch (e) { alert("Erreur"); }
     }
   };
 
-  const toggleExpand = (id) => setExpandedParent(expandedParent === id ? null : id);
-
   /* --- RENDER --- */
   return (
-    <div className="p-8 bg-gray-50 min-h-screen text-gray-800">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-semibold text-gray-900">👨‍👩‍👧 Gestion des parents</h1>
-        <button
-          onClick={openCreateModal}
-          className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-medium shadow-sm transition"
-        >
-          + Ajouter un parent
-        </button>
-      </div>
-
-      {/* Barre de recherche et actions */}
-      <div className="flex flex-wrap items-center gap-3 mb-6">
-        <input
-          aria-label="Rechercher parents"
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); setPage(1); }}
-          placeholder="Rechercher (nom, username, email)..."
-          className="border border-gray-300 rounded-lg px-3 py-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 flex-1 min-w-[200px]"
-        />
-        <button
-          title={viewMode === "table" ? "Basculer en vue cartes" : "Basculer en vue tableau"}
-          onClick={() => setViewMode(viewMode === "table" ? "cards" : "table")}
-          className="bg-white border border-gray-300 px-3 py-2 rounded-lg shadow-sm"
-        >
-          {viewMode === "table" ? "Vue cartes" : "Vue tableau"}
-        </button>
-        <button onClick={() => { setQuery(""); fetchParents(); }} className="bg-white px-3 py-2 rounded-lg border border-gray-300 shadow-sm" title="Rafraîchir">
-          <FaSyncAlt />
-        </button>
-      </div>
-
-      {/* Content */}
-      {loading ? (
-        <div className="bg-white rounded-xl p-6 shadow-sm">
-          <Skeleton lines={8} />
-        </div>
-      ) : error ? (
-        <div className="bg-white rounded-xl p-6 shadow-sm text-red-600">{error}</div>
-      ) : filtered.length === 0 ? (
-        <div className="bg-white rounded-xl p-6 shadow-sm">
-          <EmptyState title="Aucun parent trouvé" subtitle="Ajuste ta recherche ou ajoute un nouveau parent." />
-        </div>
-      ) : (
-        <>
-          {/* Table view */}
-          {viewMode === "table" ? (
-            <div className="bg-white shadow rounded-xl overflow-hidden border border-gray-200">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-100 text-gray-700 uppercase text-xs">
-                  <tr>
-                    <th className="py-3 px-4 text-left">Parent</th>
-                    <th className="py-3 px-4 text-left">Username</th>
-                    <th className="py-3 px-4 text-left">Email</th>
-                    <th className="py-3 px-4 text-left">Téléphone</th>
-                    <th className="py-3 px-4 text-left">Enfants</th>
-                    <th className="py-3 px-4 text-center">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pageData.map((p) => {
-                    const first = p?.user?.first_name ?? p?.first_name ?? "";
-                    const last = p?.user?.last_name ?? p?.last_name ?? "";
-                    const children = p?.students ?? [];
-                    return (
-                      <React.Fragment key={p.id}>
-                        <tr className="border-t hover:bg-gray-50 transition">
-                          <td className="py-3 px-4">
-                            <div className="font-medium text-gray-800">{first} {last}</div>
-                            <div className="text-xs text-gray-400">ID: {p.id}</div>
-                          </td>
-                          <td className="py-3 px-4">{p?.user?.username ?? p?.username ?? "—"}</td>
-                          <td className="py-3 px-4">{p?.user?.email ?? p?.email ?? "—"}</td>
-                          <td className="py-3 px-4">{p?.phone ?? "—"}</td>
-                          <td className="py-3 px-4">
-                            <span className="inline-block bg-gray-100 text-gray-700 px-2 py-1 rounded-lg text-xs font-medium">
-                              {children.length} enfant{children.length > 1 ? "s" : ""}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 flex justify-center gap-2">
-                            <button
-                              onClick={() => openEditModal(p)}
-                              className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-lg text-xs shadow-sm"
-                            >
-                              Modifier
-                            </button>
-                            <button
-                              onClick={() => handleDelete(p.id)}
-                              className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-lg text-xs shadow-sm"
-                            >
-                              Supprimer
-                            </button>
-                            {children.length > 0 && (
-                              <button
-                                onClick={() => toggleExpand(p.id)}
-                                className={`px-3 py-1 rounded-lg text-xs shadow-sm ${expandedParent === p.id ? 'bg-white border border-gray-200' : 'bg-white hover:bg-gray-50 border border-gray-200'}`}
-                                aria-expanded={expandedParent === p.id}
-                              >
-                                {expandedParent === p.id ? "Cacher" : "Enfants"}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-
-                        {/* Expanded children */}
-                        {expandedParent === p.id && children.length > 0 && (
-                          <tr>
-                            <td colSpan={6} className="bg-gray-50 px-4 py-4">
-                              <div className="overflow-auto">
-                                <table className="min-w-full text-xs bg-white border rounded-lg">
-                                  <thead className="bg-gray-100">
-                                    <tr>
-                                      <th className="px-3 py-2 text-left">ID</th>
-                                      <th className="px-3 py-2 text-left">Prénom</th>
-                                      <th className="px-3 py-2 text-left">Nom</th>
-                                      <th className="px-3 py-2 text-left">Username</th>
-                                      <th className="px-3 py-2 text-left">Classe</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {children.map((s) => {
-                                      const firstChild =
-                                        s?.user?.first_name ??
-                                        s?.user?.firstname ??
-                                        s?.firstname ??
-                                        s?.first_name ??
-                                        s?.user?.firstName ??
-                                        "—";
-                                      const lastChild =
-                                        s?.user?.last_name ??
-                                        s?.user?.lastname ??
-                                        s?.lastname ??
-                                        s?.last_name ??
-                                        s?.user?.lastName ??
-                                        "—";
-                                      const username = s?.user?.username ?? s?.username ?? "—";
-                                      const className = s?.school_class?.name ?? s?.school_class_name ?? "—";
-
-                                      return (
-                                        <tr key={s.id} className="border-t hover:bg-gray-50">
-                                          <td className="px-3 py-2">{s.id}</td>
-                                          <td className="px-3 py-2">{firstChild}</td>
-                                          <td className="px-3 py-2">{lastChild}</td>
-                                          <td className="px-3 py-2">{username}</td>
-                                          <td className="px-3 py-2">{className}</td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-
-              {/* Pagination footer */}
-              <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50">
-                <div className="text-sm text-gray-600">
-                  Affichage {filtered.length === 0 ? 0 : (page - 1) * pageSize + 1} —{' '}
-                  {Math.min(page * pageSize, filtered.length)} sur {filtered.length}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                    className={`px-3 py-1 rounded-lg text-sm shadow-sm ${page === 1 ? 'bg-gray-200 text-gray-500' : 'bg-white hover:bg-gray-100'}`}
-                  >
-                    Précédent
-                  </button>
-                  <div className="text-sm text-gray-700">Page {page} / {totalPages}</div>
-                  <button
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={page === totalPages}
-                    className={`px-3 py-1 rounded-lg text-sm shadow-sm ${page === totalPages ? 'bg-gray-200 text-gray-500' : 'bg-white hover:bg-gray-100'}`}
-                  >
-                    Suivant
-                  </button>
-                </div>
-              </div>
+    <div className="min-h-screen bg-slate-50 text-slate-800 pb-20 font-sans">
+      
+      {/* HEADER STICKY */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm bg-opacity-90 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+               <div className="bg-indigo-600 p-2.5 rounded-xl text-white shadow-lg shadow-indigo-200">
+                  <FaUserTie size={20} />
+               </div>
+               <div>
+                 <h1 className="text-xl font-bold text-slate-900 leading-tight">Parents & Tuteurs</h1>
+                 <p className="text-xs text-slate-500">Vue Liste Détaillée</p>
+               </div>
             </div>
-          ) : (
-            /* Card view */
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {pageData.map((p) => {
-                const first = p?.user?.first_name ?? p?.first_name ?? "";
-                const last = p?.user?.last_name ?? p?.last_name ?? "";
-                const children = p?.students ?? [];
-                return (
-                  <div key={p.id} className="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="font-semibold text-gray-800">{first} {last}</div>
-                        <div className="text-xs text-gray-400">ID: {p.id} • {p?.user?.username ?? "—"}</div>
-                      </div>
-                      <div className="text-sm text-gray-500">{children.length} enfant{children.length > 1 ? "s" : ""}</div>
-                    </div>
-
-                    <div className="mt-3 text-sm text-gray-600 space-y-2">
-                      {children.length === 0 ? (
-                        <div className="text-xs text-gray-400">Aucun enfant</div>
-                      ) : (
-                        children.map((s) => (
-                          <div key={s.id} className="rounded-lg p-2 bg-gray-50">
-                            <div className="text-sm font-medium">{s?.user?.first_name ?? s.firstname ?? "—"} {s?.user?.last_name ?? s.lastname ?? "—"}</div>
-                            <div className="text-xs text-gray-500">ID: {s.id} • Classe: {s?.school_class?.name ?? "—"}</div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-
-                    <div className="mt-4 flex gap-2">
-                      <button onClick={() => openEditModal(p)} className="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 rounded-lg text-sm shadow-sm">Modifier</button>
-                      <button onClick={() => handleDelete(p.id)} className="flex-1 bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg text-sm shadow-sm">Suppr</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Modal Create/Edit */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg w-full max-w-lg p-6 animate-fadeIn">
-            <h2 className="text-xl font-semibold mb-4 text-gray-800">
-              {currentParent ? "Modifier le parent" : "Ajouter un parent"}
-            </h2>
-
-            <div className="grid grid-cols-1 gap-3">
-              {!currentParent && (
-                <input
-                  ref={firstInputRef}
-                  placeholder="Nom d'utilisateur"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className="input"
-                />
-              )}
-
-              <div className="grid grid-cols-2 gap-3">
-                <input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Prénom" className="input" />
-                <input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Nom" className="input" />
-              </div>
-
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="input" />
-              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Téléphone" className="input" />
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={currentParent ? "Mot de passe (laisser vide)" : "Mot de passe"} className="input" />
-
-              {formErrors.username && <div className="text-xs text-rose-600 mt-1">{formErrors.username}</div>}
-              {formErrors.firstName && <div className="text-xs text-rose-600 mt-1">{formErrors.firstName}</div>}
-              {formErrors.lastName && <div className="text-xs text-rose-600 mt-1">{formErrors.lastName}</div>}
-              {formErrors.email && <div className="text-xs text-rose-600 mt-1">{formErrors.email}</div>}
-              {formErrors.password && <div className="text-xs text-rose-600 mt-1">{formErrors.password}</div>}
-              {formErrors.submit && <div className="text-sm text-rose-600">{formErrors.submit}</div>}
-
-              <div className="flex justify-end gap-2 mt-4">
-                <button onClick={closeModal} disabled={saving} className="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg">Annuler</button>
-                <button
-                  onClick={handleSubmit}
-                  disabled={saving}
-                  className={`px-4 py-2 rounded-lg text-white ${saving ? "bg-yellow-500" : "bg-green-600 hover:bg-green-700"}`}
-                >
-                  {saving ? "Enregistrement..." : (currentParent ? "Modifier" : "Ajouter")}
-                </button>
-              </div>
+            <div className="flex items-center gap-3">
+              <button onClick={() => { setQuery(""); fetchParents(); }} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition"><FaSyncAlt className={loading ? "animate-spin" : ""} /></button>
+              <button onClick={() => openModal()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg shadow-md shadow-indigo-200 flex items-center gap-2 text-sm font-medium transition-transform active:scale-95"><FaPlus /> Nouveau</button>
             </div>
           </div>
+          
+          <div className="mt-4 max-w-3xl relative">
+              <FaSearch className="absolute left-3 top-3 text-slate-400" />
+              <input 
+                value={query} 
+                onChange={e => { setQuery(e.target.value); setPage(1); }}
+                placeholder="Rechercher (Nom, Email, Téléphone)..."
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-100 focus:bg-white border border-transparent focus:border-indigo-300 rounded-xl text-sm outline-none transition-all"
+              />
+          </div>
         </div>
-      )}
+      </header>
 
-      {/* Small helpers CSS (same look as Students) */}
+      {/* LIST CONTENT */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        
+        {/* Table Headers (Visual Only) */}
+        <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">
+            <div className="col-span-4">Parent</div>
+            <div className="col-span-3">Contact</div>
+            <div className="col-span-2 text-center">Enfants</div>
+            <div className="col-span-3 text-right">Actions</div>
+        </div>
+
+        <div className="space-y-3">
+          {loading ? (
+             [...Array(5)].map((_, i) => <div key={i} className="h-20 bg-gray-200 rounded-xl animate-pulse" />)
+          ) : filtered.length === 0 ? (
+             <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-slate-300 text-slate-500">Aucun parent trouvé.</div>
+          ) : (
+             pageData.map(parent => {
+                const fullName = getFullName(parent);
+                const children = parent.students || parent.children || [];
+                const isExpanded = expandedId === parent.id;
+
+                return (
+                  <div key={parent.id} className={`bg-white border rounded-xl transition-all duration-300 overflow-hidden ${isExpanded ? 'border-indigo-300 shadow-lg ring-1 ring-indigo-100' : 'border-slate-200 shadow-sm hover:border-indigo-200'}`}>
+                      
+                      {/* MAIN ROW (Always visible) */}
+                      <div 
+                        className="p-4 grid grid-cols-1 md:grid-cols-12 gap-4 items-center cursor-pointer hover:bg-slate-50 transition-colors"
+                        onClick={() => toggleExpand(parent.id)}
+                      >
+                          {/* Col 1: Identity */}
+                          <div className="md:col-span-4 flex items-center gap-3">
+                              <div className="transition-transform duration-300">
+                                  <Avatar name={fullName} />
+                              </div>
+                              <div className="min-w-0">
+                                  <h3 className="font-bold text-slate-800 truncate text-sm">{fullName}</h3>
+                                  <p className="text-xs text-slate-400 font-mono truncate">ID: {parent.id} • {parent.user?.username}</p>
+                              </div>
+                          </div>
+
+                          {/* Col 2: Contact */}
+                          <div className="md:col-span-3 flex flex-col gap-1">
+                              <div className="flex items-center gap-2 text-xs text-slate-600">
+                                  <FaPhone className="text-slate-400" /> <span>{parent.phone || "—"}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-xs text-slate-600 truncate">
+                                  <FaEnvelope className="text-slate-400" /> <span className="truncate" title={parent.user?.email}>{parent.user?.email || "—"}</span>
+                              </div>
+                          </div>
+
+                          {/* Col 3: Children Count Badge */}
+                          <div className="md:col-span-2 flex justify-center">
+                              <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold border ${children.length > 0 ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 'bg-slate-50 text-slate-400 border-slate-100'}`}>
+                                  <FaGraduationCap /> {children.length}
+                              </span>
+                          </div>
+
+                          {/* Col 4: Actions & Chevron */}
+                          <div className="md:col-span-3 flex items-center justify-end gap-3">
+                              <div className="flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+                                  <button onClick={() => openModal(parent)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"><FaEdit /></button>
+                                  <button onClick={() => handleDelete(parent.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"><FaTrash /></button>
+                              </div>
+                              <div className={`w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-400 transition-transform duration-300 ${isExpanded ? 'rotate-180 bg-indigo-50 text-indigo-600' : ''}`}>
+                                  <FaChevronDown size={12} />
+                              </div>
+                          </div>
+                      </div>
+
+                      {/* EXPANDED SECTION (Children Details) */}
+                      <div className={`grid transition-[grid-template-rows] duration-300 ease-out ${isExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+                          <div className="overflow-hidden">
+                              <div className="bg-slate-50/80 border-t border-slate-100 p-4 sm:p-6">
+                                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+                                      <FaGraduationCap /> Liste des Enfants ({children.length})
+                                  </h4>
+                                  
+                                  {children.length > 0 ? (
+                                    <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+                                        <table className="w-full text-left text-sm">
+                                            <thead className="bg-slate-100 text-slate-500 uppercase text-[10px] font-bold">
+                                                <tr>
+                                                    <th className="px-4 py-2">ID</th>
+                                                    <th className="px-4 py-2">Prénom</th>
+                                                    <th className="px-4 py-2">Nom</th>
+                                                    <th className="px-4 py-2">Username</th>
+                                                    <th className="px-4 py-2">Classe</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {children.map(child => {
+                                                    const cFirst = child.user?.first_name || child.firstname || "—";
+                                                    const cLast = child.user?.last_name || child.lastname || "—";
+                                                    return (
+                                                        <tr key={child.id} className="hover:bg-slate-50/50">
+                                                            <td className="px-4 py-2.5 font-mono text-slate-400 text-xs">{child.id}</td>
+                                                            <td className="px-4 py-2.5 font-medium text-slate-700">{cFirst}</td>
+                                                            <td className="px-4 py-2.5 font-bold text-slate-800">{cLast}</td>
+                                                            <td className="px-4 py-2.5 text-slate-500 text-xs">{child.user?.username || child.username}</td>
+                                                            <td className="px-4 py-2.5">
+                                                                <span className="inline-block bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded text-xs font-bold border border-indigo-100">
+                                                                    {child.school_class?.name || "—"}
+                                                                </span>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                  ) : (
+                                    <div className="text-center py-4 bg-white rounded-lg border border-dashed border-slate-300 text-slate-400 text-sm italic">
+                                        Aucun enfant associé à ce compte parent.
+                                    </div>
+                                  )}
+                              </div>
+                          </div>
+                      </div>
+                  </div>
+                );
+             })
+          )}
+        </div>
+
+        {/* PAGINATION */}
+        {totalPages > 1 && (
+           <div className="flex justify-center mt-10 gap-2">
+             <button disabled={page === 1} onClick={() => setPage(p => p - 1)} className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-sm font-bold text-slate-600 disabled:opacity-50 hover:bg-slate-50">Précédent</button>
+             <span className="px-4 py-2 text-sm text-slate-500 font-medium self-center">Page {page} / {totalPages}</span>
+             <button disabled={page === totalPages} onClick={() => setPage(p => p + 1)} className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-sm font-bold text-slate-600 disabled:opacity-50 hover:bg-slate-50">Suivant</button>
+           </div>
+        )}
+      </main>
+
+      {/* MODAL FORM */}
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={currentParent ? "Modifier Parent" : "Nouveau Parent"}>
+        <div className="space-y-4">
+           {formErrors.global && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm">{formErrors.global}</div>}
+           
+           {!currentParent && (
+             <div>
+               <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Username</label>
+               <input className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                 value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} placeholder="Auto si vide" />
+             </div>
+           )}
+           <div className="grid grid-cols-2 gap-4">
+             <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Prénom *</label>
+               <input className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                 value={formData.firstName} onChange={e => setFormData({...formData, firstName: e.target.value})} />
+             </div>
+             <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nom *</label>
+               <input className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                 value={formData.lastName} onChange={e => setFormData({...formData, lastName: e.target.value})} />
+             </div>
+           </div>
+           <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label>
+             <input type="email" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+               value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} />
+           </div>
+           <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Téléphone</label>
+             <input className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+               value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
+           </div>
+           <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Mot de passe {currentParent && "(Optionnel)"}</label>
+             <input type="password" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+               value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} />
+           </div>
+           <div className="pt-6 flex justify-end gap-3 border-t border-slate-100 mt-4">
+              <button onClick={() => setShowModal(false)} className="px-5 py-2.5 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-sm">Annuler</button>
+              <button onClick={handleSubmit} disabled={saving} className="px-6 py-2.5 rounded-xl bg-indigo-600 text-white font-bold shadow-lg hover:bg-indigo-700 text-sm flex items-center gap-2">
+                 {saving ? <FaSyncAlt className="animate-spin" /> : <FaCheck />} Enregistrer
+              </button>
+           </div>
+        </div>
+      </Modal>
+
       <style>{`
-        .input {
-          width: 100%;
-          border: 1px solid #d1d5db; /* gray-300 */
-          border-radius: 0.5rem;
-          padding: 0.5rem 0.75rem;
-          box-sizing: border-box;
-          outline: none;
-        }
-        .input:focus {
-          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
-          border-color: #6366f1;
-        }
-        @keyframes fadeIn {
-          from { opacity: 0; transform: scale(0.98); }
-          to { opacity: 1; transform: scale(1); }
-        }
-        .animate-fadeIn { animation: fadeIn 0.18s ease-out; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        @keyframes fadeIn { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: scale(1); } }
+        .animate-fadeIn { animation: fadeIn 0.2s ease-out forwards; }
       `}</style>
     </div>
   );
-};
-
-export default Parents;
+}

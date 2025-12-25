@@ -85,7 +85,16 @@ export async function patchData(endpoint, data) {
   });
   return handleResponse(res);
 }
-
+// Dans src/api.js, ajoutez cette fonction juste après postFormData
+export async function patchFormData(endpoint, formData) {
+  const url = buildUrl(endpoint);
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { ...getAuthHeader() }, // do NOT set Content-Type; browser sets boundary
+    body: formData,
+  });
+  return handleResponse(res);
+}
 export async function deleteData(endpoint) {
   const url = buildUrl(endpoint);
   const res = await fetch(url, {

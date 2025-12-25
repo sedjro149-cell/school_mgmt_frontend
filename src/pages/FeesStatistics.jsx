@@ -26,7 +26,7 @@ function formatMoneyEUR(v) {
 }
 
 export default function PaymentsPage() {
-  const [payments, setPayments] = useState([]);
+  const [paymentsRaw, setPaymentsRaw] = useState([]); // raw list fetched from server (could be paginated page or full list)
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -36,6 +36,8 @@ export default function PaymentsPage() {
   const [ordering, setOrdering] = useState("-paid_at"); // default
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+
+  // count will reflect the filtered count (client-side)
   const [count, setCount] = useState(null);
 
   // small UI states
@@ -46,49 +48,172 @@ export default function PaymentsPage() {
   const [form, setForm] = useState({ fee: "", amount: "", method: "", reference: "", note: "" });
 
   // fetch payments with filters, search, ordering and pagination
+  // NOTE: we request a LARGE page_size when user is actively filtering so client can apply filters reliably.
   const fetchPayments = async (opts = {}) => {
     setLoading(true);
     setError(null);
     try {
+      // if opts.fetchAll === true -> force large page_size to try retrieve all items
+      const shouldFetchAll =
+        opts.fetchAll === true || search.trim() !== "" || validatedOnly || (ordering && ordering !== "-paid_at");
+
       const params = {
         search: search || undefined,
         ordering: ordering || undefined,
         page: page || 1,
-        page_size: pageSize || 20,
+        page_size: shouldFetchAll ? 10000 : pageSize || 20,
         validated: validatedOnly ? "1" : undefined,
         ...(opts.params || {}),
       };
 
       const data = await fetchData("/fees/payments/", { params });
+
       // handle DRF-style pagination or plain array
       const results = data?.results ?? data ?? [];
-      setPayments(Array.isArray(results) ? results : []);
-      if (data?.count !== undefined) setCount(data.count);
-      else setCount(Array.isArray(data) ? data.length : null);
+      const list = Array.isArray(results) ? results : [];
+      setPaymentsRaw(list);
+
+      // If backend returned a total count and we fetched full pages, use it; else we compute filtered count later
+      if (data?.count !== undefined && !shouldFetchAll) {
+        // server paginated response AND we didn't fetch all -> keep server-side count as fallback
+        setCount(data.count);
+      } else {
+        // otherwise, we'll compute count based on client filtering
+        setCount(list.length);
+      }
     } catch (err) {
       console.error("fetchPayments:", err);
       setError("Impossible de récupérer les paiements.");
+      setPaymentsRaw([]);
+      setCount(0);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchPayments();
+    // On filter change, reset to page 1 and fetch payments (fetch will request a big page_size so client-side filters work)
+    setPage(1);
+    fetchPayments({ fetchAll: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, validatedOnly, ordering, page, pageSize]);
+  }, [search, validatedOnly, ordering, pageSize]);
+
+  // also fetch when page changes (but do not re-fetch full list if we already have it)
+  useEffect(() => {
+    // If the current raw data length seems smaller than pageSize and we rely on server paging, fetch that page:
+    // Simpler rule: when user only changes page, request that page normally (not fetchAll).
+    fetchPayments({ params: { page } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
 
   // Helper: extract a stable student object from a payment
   const studentFromPayment = (p) => {
     return p.student ?? p.fee_detail?.student ?? (p.fee?.student ?? null);
   };
 
+  // CLIENT-SIDE FILTERING + SORTING + PAGINATION (applied to paymentsRaw)
+  const filteredAndPaged = useMemo(() => {
+    const arr = Array.isArray(paymentsRaw) ? paymentsRaw.slice() : [];
+
+    // local filter: search
+    const q = (search || "").trim().toLowerCase();
+    const matchesSearch = (p) => {
+      if (!q) return true;
+
+      // student fields
+      const stud = studentFromPayment(p) || {};
+      const nameCandidates = [
+        stud.full_name,
+        `${stud.first_name ?? ""} ${stud.last_name ?? ""}`.trim(),
+        stud.username,
+        stud.email,
+      ]
+        .filter(Boolean)
+        .map((s) => String(s).toLowerCase());
+
+      for (const s of nameCandidates) {
+        if (s.includes(q)) return true;
+      }
+
+      // payment fields
+      if (p.reference && String(p.reference).toLowerCase().includes(q)) return true;
+      if (p.note && String(p.note).toLowerCase().includes(q)) return true;
+
+      // fee fields
+      const fee = p.fee_detail ?? p.fee ?? {};
+      if (fee.fee_type_name && String(fee.fee_type_name).toLowerCase().includes(q)) return true;
+      if (fee.id && String(fee.id).toLowerCase().includes(q)) return true;
+      if (fee.amount && String(fee.amount).toLowerCase().includes(q)) return true;
+
+      return false;
+    };
+
+    // filter validatedOnly
+    const matchesValidated = (p) => {
+      if (!validatedOnly) return true;
+      return !!p.validated;
+    };
+
+    const filtered = arr.filter((p) => matchesSearch(p) && matchesValidated(p));
+
+    // Sorting
+    const cmp = (a, b, field, asc = true) => {
+      const va = a[field];
+      const vb = b[field];
+      if (va == null && vb == null) return 0;
+      if (va == null) return asc ? -1 : 1;
+      if (vb == null) return asc ? 1 : -1;
+      // numeric date values
+      if (field === "amount") {
+        return (Number(va) - Number(vb)) * (asc ? 1 : -1);
+      }
+      if (field === "paid_at" || field === "validated_at" || field === "created_at") {
+        const da = new Date(va).getTime() || 0;
+        const db = new Date(vb).getTime() || 0;
+        return (da - db) * (asc ? 1 : -1);
+      }
+      // fallback string compare
+      return String(va).localeCompare(String(vb)) * (asc ? 1 : -1);
+    };
+
+    // interpret ordering string
+    const order = ordering || "-paid_at";
+    let sorted = filtered;
+    try {
+      if (order.startsWith("-")) {
+        const field = order.substring(1);
+        sorted = filtered.sort((a, b) => cmp(a, b, field, false));
+      } else {
+        const field = order;
+        sorted = filtered.sort((a, b) => cmp(a, b, field, true));
+      }
+    } catch (e) {
+      // fallback: no sorting if unknown field
+      sorted = filtered;
+    }
+
+    // Update count for pagination
+    const totalFiltered = sorted.length;
+    setCount(totalFiltered);
+
+    // Client-side pagination
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize;
+    const pageSlice = sorted.slice(from, to);
+
+    return {
+      total: totalFiltered,
+      pageSlice,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentsRaw, search, validatedOnly, ordering, page, pageSize]);
+
   // validate a payment (admin action)
   const validatePayment = async (id) => {
     if (!window.confirm("Valider ce paiement ?")) return;
     try {
       await postData(`/fees/payments/${id}/validate_payment/`, {});
-      await fetchPayments();
+      await fetchPayments({ fetchAll: true });
     } catch (err) {
       console.error("validatePayment:", err);
       alert(err?.response?.data?.detail || "Échec de validation");
@@ -99,7 +224,7 @@ export default function PaymentsPage() {
     if (!window.confirm("Supprimer ce paiement ? (opération irréversible)")) return;
     try {
       await deleteData(`/fees/payments/${id}/`);
-      await fetchPayments();
+      await fetchPayments({ fetchAll: true });
     } catch (err) {
       console.error("deletePayment:", err);
       alert("Impossible de supprimer le paiement.");
@@ -120,7 +245,7 @@ export default function PaymentsPage() {
 
       await postData(`/fees/payments/`, payload);
       // refresh first page to ensure created item appears
-      await fetchPayments({ params: { page: 1 } });
+      await fetchPayments({ params: { page: 1 }, fetchAll: true });
       setShowCreate(false);
       setForm({ fee: "", amount: "", method: "", reference: "", note: "" });
     } catch (err) {
@@ -136,12 +261,17 @@ export default function PaymentsPage() {
     }
   };
 
+  // Derived list to render
+  const visiblePayments = filteredAndPaged.pageSlice ?? [];
+  const visibleCount = filteredAndPaged.total ?? count ?? 0;
+  const firstIndex = visibleCount === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastIndex = Math.min(page * pageSize, visibleCount);
+
   return (
     <div className="min-h-screen p-6 bg-gradient-to-b from-white to-gray-50">
       <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Paiements</h1>
-          
         </div>
 
         <div className="flex items-center gap-3">
@@ -159,7 +289,7 @@ export default function PaymentsPage() {
               setValidatedOnly(false);
               setOrdering("-paid_at");
               setPage(1);
-              fetchPayments();
+              fetchPayments({ fetchAll: true });
             }}
             className="inline-flex items-center gap-2 bg-white border px-3 py-2 rounded-lg shadow-sm"
             title="Réinitialiser filtres"
@@ -197,7 +327,14 @@ export default function PaymentsPage() {
               Paiements validés seulement
             </label>
 
-            <select value={ordering} onChange={(e) => setOrdering(e.target.value)} className="border rounded-lg px-3 py-2">
+            <select
+              value={ordering}
+              onChange={(e) => {
+                setOrdering(e.target.value);
+                setPage(1);
+              }}
+              className="border rounded-lg px-3 py-2"
+            >
               <option value="-paid_at">Plus récents</option>
               <option value="paid_at">Plus anciens</option>
               <option value="-amount">Montant décroissant</option>
@@ -242,10 +379,10 @@ export default function PaymentsPage() {
 
             {loading ? (
               <div className="p-6 text-center text-slate-500">Chargement...</div>
-            ) : payments.length === 0 ? (
+            ) : visiblePayments.length === 0 ? (
               <div className="p-6 text-center text-slate-500">Aucun paiement trouvé.</div>
             ) : (
-              payments.map((p) => {
+              visiblePayments.map((p) => {
                 const stud = studentFromPayment(p) || {};
                 const feeDetail = p.fee_detail ?? p.fee ?? {};
                 return (
@@ -260,9 +397,7 @@ export default function PaymentsPage() {
                         {stud.level ? `• ${stud.level}` : null}
                       </div>
 
-                      <div className="text-xs text-slate-500 mt-1">
-                        S-Id: {(stud.id ?? feeDetail?.student ?? "—")}
-                      </div>
+                      <div className="text-xs text-slate-500 mt-1">S-Id: {(stud.id ?? feeDetail?.student ?? "—")}</div>
                     </div>
 
                     <div className="col-span-2 font-semibold">{formatMoneyEUR(p.amount)}</div>
@@ -325,7 +460,7 @@ export default function PaymentsPage() {
           {/* pagination controls */}
           <div className="flex items-center justify-between">
             <div className="text-sm text-slate-500">
-              {count !== null ? `${Math.min((page - 1) * pageSize + 1, count)}–${Math.min(page * pageSize, count)} sur ${count}` : "—"}
+              {visibleCount !== null ? `${firstIndex}-${lastIndex} sur ${visibleCount}` : "—"}
             </div>
 
             <div className="flex items-center gap-2">
@@ -333,7 +468,13 @@ export default function PaymentsPage() {
                 Préc.
               </button>
               <span className="px-3 py-1">{page}</span>
-              <button onClick={() => setPage((p) => p + 1)} className="px-3 py-1 border rounded">
+              <button
+                onClick={() => {
+                  // next page only if there are more items
+                  if (page * pageSize < visibleCount) setPage((p) => p + 1);
+                }}
+                className="px-3 py-1 border rounded"
+              >
                 Suiv.
               </button>
             </div>

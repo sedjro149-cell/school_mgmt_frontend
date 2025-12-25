@@ -4,9 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   FaUsers,
   FaChalkboardTeacher,
-  FaBook,
   FaSchool,
-  FaClipboardList,
   FaClock,
   FaPen,
   FaFileAlt,
@@ -16,8 +14,11 @@ import {
   FaChartPie,
   FaHome,
   FaSyncAlt,
+  FaBolt,
 } from "react-icons/fa";
 import { fetchData } from "./api";
+import usePreventTranslate from "./hooks/usePreventTranslate";
+
 
 /* ----------------------
    Navigation sections
@@ -43,6 +44,10 @@ const sections = [
       { title: "Notes", link: "/academics/grades", icon: FaPen },
       { title: "Saisie massive", link: "/academics/grades/bulk-entry", icon: FaLayerGroup },
       { title: "Bulletins", link: "/academics/reportcards", icon: FaRegChartBar },
+      { title: "Annonces", link: "/academics/anouncementmgmt", icon: FaRegChartBar },
+      { title: "Présence", link: "/academics/absences", icon: FaLayerGroup },
+
+
     ],
   },
   {
@@ -205,6 +210,20 @@ const Sidebar = ({ navigate }) => (
             </div>
           </div>
         ))}
+
+        {/* NAV LINK: Génération emploi du temps (discret) */}
+        <div className="mt-6 px-3">
+          <button
+            onClick={() => navigate('/academics/generatetimetable')}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 transition text-sm text-gray-700"
+            title="Générer emploi du temps"
+          >
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-gradient-to-br from-yellow-400 to-orange-500 text-white shadow-sm">
+              <FaBolt className="w-4 h-4" />
+            </div>
+            <span>Génération emploi</span>
+          </button>
+        </div>
       </nav>
     </div>
 
@@ -219,6 +238,8 @@ const Sidebar = ({ navigate }) => (
    ---------------------- */
 const Dashboard = () => {
   const navigate = useNavigate();
+  
+usePreventTranslate([]);
 
   const [stats, setStats] = useState({
     students_count: null,
@@ -277,8 +298,6 @@ const Dashboard = () => {
   const female = stats.students_by_sex?.F ?? 0;
   const totalSex = male + female;
   const malePercent = totalSex ? Math.round((male / totalSex) * 100) : 0;
-
-  const barData = stats.top_classes && stats.top_classes.length ? stats.top_classes.map((c) => Number(c.student_count || 0)) : [20, 40, 30, 60, 50];
 
   const nice = (n) => (n === null || n === undefined ? "—" : typeof n === "number" && n >= 1000 ? n.toLocaleString() : String(n));
 
@@ -341,7 +360,7 @@ const Dashboard = () => {
             />
           </section>
 
-          <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 mb-6">
             {sections.flatMap((sec) => sec.items).map((card, idx) => (
               <ActionCard
                 key={idx}
@@ -352,6 +371,20 @@ const Dashboard = () => {
                 onClick={() => navigate(card.link)}
               />
             ))}
+          </section>
+
+          {/* NEW ACTION CARD: accès direct à la génération d'emploi du temps */}
+          <section className="mb-8">
+            <h2 className="text-lg font-semibold mb-3">Outils rapides</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <ActionCard
+                title="Générer emploi du temps"
+                subtitle="Lancer la génération et visualiser le rapport"
+                gradient="from-yellow-400 to-orange-500"
+                icon={FaBolt}
+                onClick={() => navigate('/academics/generatetimetable')}
+              />
+            </div>
           </section>
         </main>
       </div>

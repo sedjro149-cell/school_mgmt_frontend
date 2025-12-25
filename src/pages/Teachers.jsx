@@ -1,397 +1,333 @@
-// src/pages/Teachers.jsx
-import React, { useEffect, useState } from "react";
-import { fetchData, postData,  patchData, deleteData } from "./api";
+import React, { useEffect, useState, useMemo } from "react";
+import {
+  FaSearch,
+  FaPlus,
+  FaEdit,
+  FaTrash,
+  FaSyncAlt,
+  FaChalkboardTeacher,
+  FaBookOpen,
+  FaUsers,
+  FaEnvelope,
+  FaIdCard,
+  FaTimes,
+  FaCheck
+} from "react-icons/fa";
+import { fetchData, postData, patchData, deleteData } from "./api";
 
-/**
- * Teachers.jsx (Design modernisé — migration vers src/api.js)
- */
+/* --- COMPONENTS --- */
+
+const Avatar = ({ firstName, lastName }) => {
+  const initials = `${(firstName || "?")[0]}${(lastName || "?")[0]}`.toUpperCase();
+  return (
+    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center font-bold text-lg shadow-md ring-2 ring-white">
+      {initials}
+    </div>
+  );
+};
+
+const SubjectBadge = ({ subject }) => (
+  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-100">
+    <FaBookOpen size={10} />
+    {subject || "Non assigné"}
+  </span>
+);
+
+const ClassTag = ({ name }) => (
+  <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-medium border border-slate-200">
+    {name}
+  </span>
+);
+
+const Modal = ({ isOpen, onClose, title, children }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden transform transition-all scale-100 max-h-[90vh]">
+        <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+          <h3 className="text-lg font-bold text-slate-800">{title}</h3>
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition"><FaTimes /></button>
+        </div>
+        <div className="p-6 custom-scrollbar overflow-y-auto">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const Teachers = () => {
+  /* --- STATE --- */
   const [teachers, setTeachers] = useState([]);
-  const [filteredTeachers, setFilteredTeachers] = useState([]);
+  const [subjects, setSubjects] = useState([]);
+  const [classes, setClasses] = useState([]);
+  
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
+  
+  // UI
+  const [query, setQuery] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [currentTeacher, setCurrentTeacher] = useState(null);
 
-  const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [password, setPassword] = useState("");
+  // Form
+  const [formData, setFormData] = useState({
+    username: "", email: "", firstName: "", lastName: "", password: "",
+    subjectId: "", classIds: []
+  });
 
-  const [subjectId, setSubjectId] = useState("");
-  const [classIds, setClassIds] = useState([]);
-
-  const [subjects, setSubjects] = useState([]);
-  const [classes, setClasses] = useState([]);
-
-  const [query, setQuery] = useState("");
-
-  // ===============================
-  // ======= FETCH DATA ============
-  // ===============================
-  const fetchTeachers = async () => {
+  /* --- FETCHERS --- */
+  const fetchAll = async () => {
     setLoading(true);
-    setError("");
     try {
-      const data = await fetchData("/core/admin/teachers/");
-      const list = Array.isArray(data) ? data : data?.results || [];
-      setTeachers(list);
-      setFilteredTeachers(list);
+      const [tData, sData, cData] = await Promise.all([
+        fetchData("/core/admin/teachers/"),
+        fetchData("/academics/subjects/"),
+        fetchData("/academics/school-classes/")
+      ]);
+      setTeachers(Array.isArray(tData) ? tData : tData?.results || []);
+      setSubjects(Array.isArray(sData) ? sData : sData?.results || []);
+      setClasses(Array.isArray(cData) ? cData : cData?.results || []);
     } catch (err) {
-      console.error("fetchTeachers error:", err?.body ?? err?.message ?? err);
-      setError("Erreur lors du chargement des enseignants.");
+      console.error(err);
+      alert("Erreur chargement données");
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchSubjects = async () => {
-    try {
-      const data = await fetchData("/academics/subjects/");
-      setSubjects(Array.isArray(data) ? data : data?.results || []);
-    } catch (err) {
-      console.error("Erreur récupération matières:", err?.body ?? err);
-    }
-  };
+  useEffect(() => { fetchAll(); }, []);
 
-  const fetchClasses = async () => {
-    try {
-      const data = await fetchData("/academics/school-classes/");
-      setClasses(Array.isArray(data) ? data : data?.results || []);
-    } catch (err) {
-      console.error("Erreur récupération classes:", err?.body ?? err);
-    }
-  };
+  /* --- FILTERING --- */
+  const filteredTeachers = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    if (!q) return teachers;
+    return teachers.filter(t => {
+      const text = [
+        t.user?.username, t.user?.email, t.user?.first_name, t.user?.last_name,
+        t.subject?.name
+      ].join(" ").toLowerCase();
+      return text.includes(q);
+    });
+  }, [teachers, query]);
 
-  useEffect(() => {
-    fetchTeachers();
-    fetchSubjects();
-    fetchClasses();
-  }, []);
-
-  // ===============================
-  // ======= FORM LOGIC ============
-  // ===============================
-  const resetForm = () => {
-    setCurrentTeacher(null);
-    setUsername("");
-    setEmail("");
-    setFirstName("");
-    setLastName("");
-    setPassword("");
-    setSubjectId("");
-    setClassIds([]);
-  };
-
-  const openCreateModal = () => {
-    resetForm();
-    setShowModal(true);
-  };
-
-  const openEditModal = (t) => {
+  /* --- ACTIONS --- */
+  const openModal = (t = null) => {
     setCurrentTeacher(t);
-    setUsername(t?.user?.username || "");
-    setEmail(t?.user?.email || "");
-    setFirstName(t?.user?.first_name || "");
-    setLastName(t?.user?.last_name || "");
-    setPassword("");
-    setSubjectId(t?.subject?.id ?? "");
-    setClassIds((t?.classes || []).map((c) => c.id));
+    setFormData({
+      username: t?.user?.username || "",
+      email: t?.user?.email || "",
+      firstName: t?.user?.first_name || "",
+      lastName: t?.user?.last_name || "",
+      password: "",
+      subjectId: t?.subject?.id || "",
+      classIds: (t?.classes || []).map(c => c.id)
+    });
     setShowModal(true);
   };
 
-  const closeModal = () => {
-    setShowModal(false);
-    setCurrentTeacher(null);
-  };
-
-  // ===============================
-  // ======= SUBMIT LOGIC ==========
-  // ===============================
   const handleSubmit = async () => {
-    if (!email || !firstName || !lastName) {
-      alert("Champs requis : Email, prénom, nom.");
-      return;
-    }
-
+    if (!formData.email || !formData.firstName || !formData.lastName) return alert("Champs requis manquants.");
+    
     const payload = {
-      user: { email, first_name: firstName, last_name: lastName },
-      subject_id: subjectId === "" ? null : Number(subjectId),
-      class_ids: classIds,
+      user: { email: formData.email, first_name: formData.firstName, last_name: formData.lastName },
+      subject_id: formData.subjectId ? Number(formData.subjectId) : null,
+      class_ids: formData.classIds
     };
 
     if (!currentTeacher) {
-      if (!username || !password) {
-        alert("Nom d'utilisateur et mot de passe requis pour la création.");
-        return;
-      }
-      payload.user.username = username;
-      payload.user.password = password;
-    } else if (password) {
-      // password may be optional for edit
-      payload.user.password = password;
+      if (!formData.username || !formData.password) return alert("Username et mot de passe requis.");
+      payload.user.username = formData.username;
+      payload.user.password = formData.password;
+    } else if (formData.password) {
+      payload.user.password = formData.password;
     }
 
     setSaving(true);
     try {
       if (currentTeacher) {
-        // NOTE: api.js doesn't include a patch helper in the original.
-        // We use PUT here. If your backend requires PATCH, add patchData to api.js.
         await patchData(`/core/admin/teachers/${currentTeacher.id}/`, payload);
-        alert("Enseignant modifié avec succès !");
       } else {
         await postData("/core/admin/teachers/", payload);
-        alert("Enseignant créé avec succès !");
       }
-      await fetchTeachers();
-      closeModal();
+      await fetchAll();
+      setShowModal(false);
     } catch (err) {
-      console.error("submit teacher error:", err?.body ?? err?.message ?? err);
-      alert("Erreur lors de l’envoi — voir console.");
+      console.error(err);
+      alert("Erreur enregistrement.");
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Voulez-vous vraiment supprimer cet enseignant ?")) return;
+    if (!window.confirm("Supprimer cet enseignant ?")) return;
     try {
       await deleteData(`/core/admin/teachers/${id}/`);
-      alert("Enseignant supprimé !");
-      await fetchTeachers();
-    } catch (err) {
-      console.error("delete teacher error:", err?.body ?? err);
-      alert("Erreur lors de la suppression.");
-    }
+      await fetchAll();
+    } catch (err) { alert("Erreur suppression."); }
   };
 
-  // ===============================
-  // ======= SEARCH ================
-  // ===============================
-  useEffect(() => {
-    if (!query) return setFilteredTeachers(teachers);
-    const q = query.toLowerCase().trim();
-    setFilteredTeachers(
-      teachers.filter((t) => {
-        const u = t.user || {};
-        return (
-          (u.username || "").toLowerCase().includes(q) ||
-          (u.email || "").toLowerCase().includes(q) ||
-          (u.first_name || "").toLowerCase().includes(q) ||
-          (u.last_name || "").toLowerCase().includes(q)
-        );
-      })
-    );
-  }, [query, teachers]);
-
-  // ===============================
-  // ========= RENDER ==============
-  // ===============================
+  /* --- RENDER --- */
   return (
-    <div className="p-8 bg-gray-50 min-h-screen text-gray-800">
+    <div className="min-h-screen bg-slate-50 text-slate-800 pb-20 font-sans">
+      
       {/* HEADER */}
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-semibold text-gray-900">👨‍🏫 Gestion des enseignants</h1>
-        <button
-          onClick={openCreateModal}
-          className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-medium shadow-sm transition"
-        >
-          + Ajouter un enseignant
-        </button>
-      </div>
-
-      {/* BARRE DE RECHERCHE */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        <input
-          type="search"
-          placeholder="Rechercher un enseignant..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 bg-white shadow-sm focus:ring-2 focus:ring-indigo-500 w-80"
-        />
-        <button
-          onClick={() => {
-            setQuery("");
-            fetchTeachers();
-          }}
-          className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded-lg shadow-sm"
-        >
-          Réinitialiser
-        </button>
-      </div>
-
-      {/* TABLE */}
-      <div className="bg-white shadow rounded-xl overflow-hidden border border-gray-200">
-        {loading ? (
-          <div className="p-6 text-center text-gray-500">Chargement des enseignants...</div>
-        ) : error ? (
-          <div className="p-6 text-center text-red-500">{error}</div>
-        ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-100 text-gray-700 uppercase text-xs">
-              <tr>
-                <th className="py-3 px-4 text-left">ID</th>
-                <th className="py-3 px-4 text-left">Utilisateur</th>
-                <th className="py-3 px-4 text-left">Email</th>
-                <th className="py-3 px-4 text-left">Prénom</th>
-                <th className="py-3 px-4 text-left">Nom</th>
-                <th className="py-3 px-4 text-left">Matière</th>
-                <th className="py-3 px-4 text-left">Classes</th>
-                <th className="py-3 px-4 text-center">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredTeachers.map((t) => (
-                <tr key={t.id} className="border-t hover:bg-gray-50 transition">
-                  <td className="py-2 px-4">{t.id}</td>
-                  <td className="py-2 px-4">{t.user?.username}</td>
-                  <td className="py-2 px-4">{t.user?.email}</td>
-                  <td className="py-2 px-4">{t.user?.first_name}</td>
-                  <td className="py-2 px-4">{t.user?.last_name}</td>
-                  <td className="py-2 px-4">{t.subject?.name ?? "-"}</td>
-                  <td className="py-2 px-4">{(t.classes || []).map((c) => c.name).join(", ")}</td>
-                  <td className="py-2 px-4 flex justify-center gap-2">
-                    <button
-                      onClick={() => openEditModal(t)}
-                      className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-lg text-xs shadow-sm"
-                    >
-                      Modifier
-                    </button>
-                    <button
-                      onClick={() => handleDelete(t.id)}
-                      className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-lg text-xs shadow-sm"
-                    >
-                      Supprimer
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {filteredTeachers.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="text-center py-6 text-gray-500">
-                    Aucun enseignant trouvé.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* MODAL */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg w-full max-w-lg p-6 animate-fadeIn">
-            <h2 className="text-xl font-semibold mb-4 text-gray-800">
-              {currentTeacher ? "Modifier l’enseignant" : "Ajouter un enseignant"}
-            </h2>
-
-            <div className="grid grid-cols-1 gap-3">
-              {!currentTeacher && (
-                <input
-                  type="text"
-                  placeholder="Nom d'utilisateur"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className="input"
-                />
-              )}
-              <input
-                type="email"
-                placeholder="Email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="input"
-              />
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Prénom"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  className="input flex-1"
-                />
-                <input
-                  type="text"
-                  placeholder="Nom"
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  className="input flex-1"
-                />
-              </div>
-
-              <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} className="input">
-                <option value="">Sélectionner une matière</option>
-                {subjects.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                multiple
-                value={classIds}
-                onChange={(e) => setClassIds(Array.from(e.target.selectedOptions, (o) => Number(o.value)))}
-                className="input"
-              >
-                {classes.map((cls) => (
-                  <option key={cls.id} value={cls.id}>
-                    {cls.name}
-                  </option>
-                ))}
-              </select>
-
-              <input
-                type="password"
-                placeholder={currentTeacher ? "Mot de passe (laisser vide)" : "Mot de passe"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="input"
-              />
+      <div className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm bg-opacity-90 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+               <div className="bg-emerald-100 p-2 rounded-lg text-emerald-600">
+                  <FaChalkboardTeacher size={20} />
+               </div>
+               <div>
+                 <h1 className="text-xl font-bold text-slate-900 leading-tight">Corps Enseignant</h1>
+                 <p className="text-xs text-slate-500">Gestion des professeurs et attributions</p>
+               </div>
             </div>
+            <div className="flex items-center gap-3">
+              <button onClick={() => { setQuery(""); fetchAll(); }} className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-full transition"><FaSyncAlt className={loading ? "animate-spin" : ""} /></button>
+              <button onClick={() => openModal()} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg shadow-md shadow-emerald-200 flex items-center gap-2 text-sm font-medium transition-transform active:scale-95"><FaPlus /> Ajouter</button>
+            </div>
+          </div>
 
-            <div className="flex justify-end gap-2 mt-6">
-              <button onClick={closeModal} className="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg">
-                Annuler
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={saving}
-                className={`px-4 py-2 rounded-lg text-white ${saving ? "bg-yellow-500" : "bg-green-600 hover:bg-green-700"}`}
-              >
-                {saving ? "En cours..." : currentTeacher ? "Modifier" : "Ajouter"}
-              </button>
+          {/* Search */}
+          <div className="mt-4 max-w-2xl">
+            <div className="relative group">
+              <FaSearch className="absolute left-3 top-3 text-slate-400 group-focus-within:text-emerald-500 transition-colors" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Rechercher (Nom, Matière, Email)..."
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-100 border-transparent focus:bg-white border focus:border-emerald-300 rounded-xl text-sm focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all"
+              />
             </div>
           </div>
         </div>
-      )}
+      </div>
 
-      {/* small CSS for inputs + animation */}
+      {/* CONTENT */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {loading ? (
+           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
+             {[...Array(6)].map((_, i) => <div key={i} className="h-48 bg-gray-200 rounded-2xl"></div>)}
+           </div>
+        ) : filteredTeachers.length === 0 ? (
+           <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300">
+             <div className="bg-slate-50 p-4 rounded-full inline-block mb-4"><FaChalkboardTeacher className="text-4xl text-slate-300" /></div>
+             <h3 className="text-lg font-bold text-slate-700">Aucun enseignant trouvé</h3>
+           </div>
+        ) : (
+           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+             {filteredTeachers.map(t => {
+                const name = `${t.user?.first_name || ""} ${t.user?.last_name || ""}`.trim() || "Utilisateur";
+                
+                return (
+                  <div key={t.id} className="group bg-white rounded-2xl p-5 shadow-sm border border-slate-200 hover:shadow-lg hover:border-emerald-200 transition-all duration-300 relative flex flex-col">
+                    
+                    {/* Actions */}
+                    <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                      <button onClick={() => openModal(t)} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition"><FaEdit /></button>
+                      <button onClick={() => handleDelete(t.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition"><FaTrash /></button>
+                    </div>
+
+                    {/* Header */}
+                    <div className="flex items-start gap-4 mb-4">
+                       <Avatar firstName={t.user?.first_name} lastName={t.user?.last_name} />
+                       <div className="flex-1 min-w-0">
+                         <h3 className="font-bold text-slate-800 truncate text-lg leading-tight" title={name}>{name}</h3>
+                         <div className="flex items-center gap-2 mt-1">
+                            <SubjectBadge subject={t.subject?.name} />
+                         </div>
+                       </div>
+                    </div>
+
+                    {/* Info Blocks */}
+                    <div className="space-y-3 flex-1">
+                       <div className="flex items-center gap-3 text-sm text-slate-600">
+                          <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-400"><FaEnvelope size={12}/></div>
+                          <span className="truncate" title={t.user?.email}>{t.user?.email || "—"}</span>
+                       </div>
+                       <div className="flex items-center gap-3 text-sm text-slate-600">
+                          <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-400"><FaIdCard size={12}/></div>
+                          <span className="truncate">{t.user?.username}</span>
+                       </div>
+                    </div>
+
+                    {/* Classes Footer */}
+                    <div className="mt-5 pt-4 border-t border-slate-100">
+                       <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                          <FaUsers /> Classes Attribuées ({(t.classes || []).length})
+                       </div>
+                       <div className="flex flex-wrap gap-1.5">
+                          {(t.classes || []).length > 0 ? (
+                             t.classes.map(c => <ClassTag key={c.id} name={c.name} />)
+                          ) : (
+                             <span className="text-xs text-slate-400 italic">Aucune classe</span>
+                          )}
+                       </div>
+                    </div>
+                  </div>
+                );
+             })}
+           </div>
+        )}
+      </main>
+
+      {/* MODAL FORM */}
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={currentTeacher ? "Modifier Enseignant" : "Nouvel Enseignant"}>
+         <div className="space-y-5">
+            {!currentTeacher && (
+               <div>
+                 <label className="label">Nom d'utilisateur</label>
+                 <input className="input" value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} placeholder="Auto si vide" />
+               </div>
+            )}
+            
+            <div className="grid grid-cols-2 gap-4">
+               <div><label className="label">Prénom *</label><input className="input" value={formData.firstName} onChange={e => setFormData({...formData, firstName: e.target.value})} /></div>
+               <div><label className="label">Nom *</label><input className="input" value={formData.lastName} onChange={e => setFormData({...formData, lastName: e.target.value})} /></div>
+            </div>
+
+            <div><label className="label">Email *</label><input type="email" className="input" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} /></div>
+
+            <div className="grid grid-cols-1 gap-4">
+               <div>
+                  <label className="label">Matière enseignée</label>
+                  <select className="input" value={formData.subjectId} onChange={e => setFormData({...formData, subjectId: e.target.value})}>
+                     <option value="">-- Aucune --</option>
+                     {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+               </div>
+               <div>
+                  <label className="label">Classes attribuées</label>
+                  <select multiple className="input h-32 custom-scrollbar" value={formData.classIds} onChange={e => setFormData({...formData, classIds: Array.from(e.target.selectedOptions, o => Number(o.value))})}>
+                     {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  <p className="text-xs text-slate-400 mt-1">Maintenez Ctrl (ou Cmd) pour sélectionner plusieurs classes.</p>
+               </div>
+            </div>
+
+            <div><label className="label">Mot de passe {currentTeacher && "(Optionnel)"}</label><input type="password" className="input" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} /></div>
+
+            <div className="pt-6 flex justify-end gap-3 border-t border-slate-100 mt-4">
+               <button onClick={() => setShowModal(false)} className="btn-secondary">Annuler</button>
+               <button onClick={handleSubmit} disabled={saving} className="btn-primary">{saving ? <FaSyncAlt className="animate-spin" /> : <FaCheck />} Enregistrer</button>
+            </div>
+         </div>
+      </Modal>
+
       <style>{`
-        .input {
-          width: 100%;
-          border: 1px solid #d1d5db; /* gray-300 */
-          border-radius: 0.5rem;
-          padding: 0.5rem 0.75rem;
-          box-sizing: border-box;
-          outline: none;
-        }
-        .input:focus {
-          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15); /* indigo-500 ring like */
-          border-color: #6366f1;
-        }
-        @keyframes fadeIn {
-          from {opacity: 0; transform: scale(0.98);}
-          to {opacity: 1; transform: scale(1);}
-        }
-        .animate-fadeIn {
-          animation: fadeIn 0.2s ease-out;
-        }
+        .label { @apply block text-xs font-bold text-slate-500 uppercase mb-1.5; }
+        .input { @apply w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition-all; }
+        .btn-primary { @apply bg-emerald-600 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg hover:bg-emerald-700 transition text-sm flex items-center gap-2 active:scale-95; }
+        .btn-secondary { @apply px-5 py-2.5 rounded-xl text-slate-600 hover:bg-slate-100 font-bold transition text-sm border border-transparent hover:border-slate-200; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        @keyframes fadeIn { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: scale(1); } }
+        .animate-fadeIn { animation: fadeIn 0.2s ease-out forwards; }
       `}</style>
     </div>
   );

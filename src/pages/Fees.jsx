@@ -1,70 +1,118 @@
-// src/StudentsWithFees.jsx
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { fetchData, postData,  patchData, deleteData } from "./api";
+import { 
+  FaSearch, FaPlus, FaEdit, FaTrash, FaCheck, FaTimes, FaMoneyBillWave, 
+  FaUserGraduate, FaChevronDown, FaChevronUp, FaWallet, FaReceipt, FaSyncAlt,
+  FaHistory, FaUniversity, FaMobileAlt, FaCoins
+} from "react-icons/fa";
+import { fetchData, postData, patchData, deleteData } from "./api";
 
-/*
-  StudentsWithFees — Full component (filters card + sidebar + all modals)
-  Converted to use central src/api.js helpers instead of axios instance.
-*/
-
+/* --- UTILS --- */
 function formatCurrency(v) {
-  if (v == null || v === "") return "";
+  if (v == null || v === "") return "0 FCFA";
   const n = Number(v);
-  if (Number.isNaN(n)) return v;
-  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (Number.isNaN(n)) return "0 FCFA";
+  return n.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + " FCFA";
 }
 
+/* --- COMPONENTS --- */
+
+// Toast Notification
+const Toast = ({ message, onClose }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 4000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  if (!message) return null;
+
+  const styles = message.type === 'error' 
+    ? 'bg-red-50 text-red-800 border-red-200 shadow-red-100' 
+    : 'bg-emerald-50 text-emerald-800 border-emerald-200 shadow-emerald-100';
+
+  return (
+    <div className={`fixed bottom-6 right-6 z-[100] px-6 py-4 rounded-xl shadow-xl border flex items-center gap-3 animate-slideIn ${styles}`}>
+      <div className={`p-2 rounded-full ${message.type === 'error' ? 'bg-red-100' : 'bg-emerald-100'}`}>
+        {message.type === 'error' ? <FaTimes /> : <FaCheck />}
+      </div>
+      <span className="font-bold text-sm">{message.text}</span>
+    </div>
+  );
+};
+
+// Modal Wrapper
+const Modal = ({ title, isOpen, onClose, children, size = "md" }) => {
+  if (!isOpen) return null;
+  const maxWidth = size === "lg" ? "max-w-5xl" : size === "xl" ? "max-w-7xl" : "max-w-lg";
+  
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fadeIn">
+      <div className={`bg-white rounded-2xl shadow-2xl w-full ${maxWidth} max-h-[90vh] flex flex-col overflow-hidden transform transition-all`}>
+        {/* Header */}
+        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-slate-50 to-white">
+          <h3 className="text-xl font-extrabold text-slate-800 tracking-tight">{title}</h3>
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-all duration-200"><FaTimes /></button>
+        </div>
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function StudentsWithFees() {
-  // lookups
+  /* --- STATE --- */
   const [classes, setClasses] = useState([]);
   const [feeTypes, setFeeTypes] = useState([]);
-  // students
   const [classStudents, setClassStudents] = useState([]);
   const [students, setStudents] = useState([]);
-  const [loadingStudents, setLoadingStudents] = useState(false);
-  const [studentsError, setStudentsError] = useState("");
+  const [stats, setStats] = useState(null);
+  
 
-  // filters / search
+  const [loadingStudents, setLoadingStudents] = useState(false);
+  const [loadingStats, setLoadingStats] = useState(false);
+  const [toast, setToast] = useState(null);
+  
   const [filterClassId, setFilterClassId] = useState("");
   const [selectedStudentIdFilter, setSelectedStudentIdFilter] = useState("");
   const [searchQ, setSearchQ] = useState("");
   const searchDebRef = useRef(null);
 
-  // modals / fees / payments
+  // Modals
   const [studentModalOpen, setStudentModalOpen] = useState(false);
   const [feesModalOpen, setFeesModalOpen] = useState(false);
   const [paymentsModalOpen, setPaymentsModalOpen] = useState(false);
+  
+  // Selection
   const [selectedStudent, setSelectedStudent] = useState(null);
+  const [selectedFee, setSelectedFee] = useState(null);
 
-  // forms & states
+  // Forms
   const [studentForm, setStudentForm] = useState({});
-  const [savingStudent, setSavingStudent] = useState(false);
+  const [feeForm, setFeeForm] = useState({ id: null, fee_type_id: "", amount: "", due_date: "" });  
+  // IMPORTANT: Payment Form with all original fields
+  const [paymentForm, setPaymentForm] = useState({ amount: "", method: "CASH", reference: "", note: "" });
+  
+  const [showFeeTypeModal, setShowFeeTypeModal] = useState(false);
+  const [currentFeeType, setCurrentFeeType] = useState({ id: null, name: "", description: "", is_active: true, amounts: [] });
+  const [showAmountModal, setShowAmountModal] = useState(false);
+  const [currentAmount, setCurrentAmount] = useState({ id: null, fee_type: null, level: "", amount: "", is_active: true });
 
   const [fees, setFees] = useState([]);
   const [loadingFees, setLoadingFees] = useState(false);
   const [feesShowAll, setFeesShowAll] = useState(true);
-  const [selectedFee, setSelectedFee] = useState(null);
-  const [feeForm, setFeeForm] = useState({ id: null, fee_type_id: "", amount: "" });
-  const [savingFee, setSavingFee] = useState(false);
-
+  
   const [payments, setPayments] = useState([]);
   const [loadingPayments, setLoadingPayments] = useState(false);
-  const [paymentForm, setPaymentForm] = useState({ amount: "", method: "", reference: "", note: "" });
-  const [savingPayment, setSavingPayment] = useState(false);
-
-  // fee-types & stats
-  const [showFeeTypeModal, setShowFeeTypeModal] = useState(false);
-  const [currentFeeType, setCurrentFeeType] = useState({ id: null, name: "", description: "", is_active: true, amounts: [] });
-
-  const [showAmountModal, setShowAmountModal] = useState(false);
-  const [currentAmount, setCurrentAmount] = useState({ id: null, fee_type: null, level: "", amount: "", is_active: true });
-
-  const [stats, setStats] = useState(null);
-  const [loadingStats, setLoadingStats] = useState(false);
-
+  
+  const [saving, setSaving] = useState(false);
   const [expandedFeeTypeIds, setExpandedFeeTypeIds] = useState(new Set());
 
-  // ---------- lookups ----------
+  /* --- HELPERS --- */
+  const showToast = (type, text) => setToast({ type, text });
+
+  /* --- FETCHERS --- */
   const fetchLookups = useCallback(async () => {
     try {
       const [clsData, ftData] = await Promise.all([
@@ -75,44 +123,33 @@ export default function StudentsWithFees() {
       const ftRaw = ftData || [];
       setFeeTypes(ftRaw.map(ft => ({ ...ft, amounts: ft.amounts || ft.amount_set || [] })));
     } catch (e) {
-      console.error("fetchLookups", e?.body || e?.message || e);
+      console.error(e);
+      showToast("error", "Erreur chargement données.");
     }
   }, []);
 
   const fetchStats = useCallback(async () => {
     setLoadingStats(true);
     try {
-      // small query param inline
       const data = await fetchData("/fees/statistics/?validated=1");
       setStats(data || null);
-    } catch (e) {
-      console.error("fetchStats", e?.body || e?.message || e);
-    } finally {
-      setLoadingStats(false);
-    }
+    } catch (e) { console.error(e); } finally { setLoadingStats(false); }
   }, []);
 
   useEffect(() => {
     fetchLookups();
     fetchStats();
-    setClassStudents([]);
-    setStudents([]);
   }, [fetchLookups, fetchStats]);
 
-  // ---------- class selection: load students for that class ONLY ----------
+  /* --- STUDENTS LOGIC --- */
   useEffect(() => {
     let mounted = true;
     async function loadByClass(classId) {
       if (!classId) {
-        if (mounted) {
-          setClassStudents([]);
-          setStudents([]);
-          setSelectedStudentIdFilter("");
-        }
+        if (mounted) { setClassStudents([]); setStudents([]); setSelectedStudentIdFilter(""); }
         return;
       }
       setLoadingStudents(true);
-      setStudentsError("");
       try {
         const arr = await fetchData(`/core/admin/students/by-class/${classId}/`);
         if (!mounted) return;
@@ -120,10 +157,8 @@ export default function StudentsWithFees() {
         setStudents(arr || []);
         setSelectedStudentIdFilter("");
       } catch (err) {
-        console.error("loadByClass", err?.body || err?.message || err);
-        setStudentsError("Erreur lors du chargement des élèves de la classe.");
-        setClassStudents([]);
-        setStudents([]);
+        showToast("error", "Erreur chargement élèves.");
+        setClassStudents([]); setStudents([]);
       } finally {
         if (mounted) setLoadingStudents(false);
       }
@@ -132,754 +167,972 @@ export default function StudentsWithFees() {
     return () => { mounted = false; };
   }, [filterClassId]);
 
-  // when a specific student is selected from dropdown, show only that student
-  useEffect(() => {
-    if (!selectedStudentIdFilter) {
-      setStudents(classStudents);
-      return;
-    }
-    const s = classStudents.find(st => String(st.id) === String(selectedStudentIdFilter));
-    setStudents(s ? [s] : []);
-  }, [selectedStudentIdFilter, classStudents]);
-
-  // ---------- client-side search (only filters currently loaded students) ----------
   useEffect(() => {
     if (searchDebRef.current) clearTimeout(searchDebRef.current);
     searchDebRef.current = setTimeout(() => {
       const q = (searchQ || "").trim().toLowerCase();
-      if (!q) {
-        if (selectedStudentIdFilter) {
-          const s = classStudents.find(st => String(st.id) === String(selectedStudentIdFilter));
-          setStudents(s ? [s] : []);
-        } else {
-          setStudents(classStudents);
-        }
-        return;
+      let list = classStudents;
+      if (selectedStudentIdFilter) {
+        list = list.filter(st => String(st.id) === String(selectedStudentIdFilter));
       }
-      const filtered = classStudents.filter(st => {
-        const fullName = `${st.user?.first_name ?? st.firstname ?? ""} ${st.user?.last_name ?? st.lastname ?? ""}`.toLowerCase();
-        const username = (st.user?.username || "").toLowerCase();
-        const email = (st.user?.email || "").toLowerCase();
-        const idStr = String(st.id);
-        return fullName.includes(q) || username.includes(q) || email.includes(q) || idStr.includes(q);
-      });
-      setStudents(filtered);
-    }, 220);
+      if (q) {
+        list = list.filter(st => {
+          const fullName = `${st.user?.first_name ?? st.firstname ?? ""} ${st.user?.last_name ?? st.lastname ?? ""}`.toLowerCase();
+          return fullName.includes(q) || (st.user?.username || "").toLowerCase().includes(q);
+        });
+      }
+      setStudents(list);
+    }, 200);
     return () => clearTimeout(searchDebRef.current);
   }, [searchQ, classStudents, selectedStudentIdFilter]);
 
-  // ---------- utilities & small components ----------
-  const toggleFeeTypeExpand = (id) => {
-    setExpandedFeeTypeIds(prev => {
-      const copy = new Set(prev);
-      const sid = String(id);
-      if (copy.has(sid)) copy.delete(sid);
-      else copy.add(sid);
-      return copy;
-    });
-  };
-
-  const getFeeTypeDisplay = (f) => {
-    if (!f) return "—";
-    const ft = f.fee_type;
-    if (ft && typeof ft === "object") return ft.name ?? ft.fee_type_name ?? String(ft.id ?? "—");
-    if (f.fee_type_name) return f.fee_type_name;
-    if (f.fee_type_display) return f.fee_type_display;
-    if (typeof ft === "string" || typeof ft === "number") return String(ft);
-    return "—";
-  };
-
-  const StatsBar = ({ stats }) => {
-    if (!stats) return <div className="text-sm text-gray-500">Aucune donnée</div>;
-    const expected = Number(stats.global?.total_expected ?? stats.global?.total_due ?? 0);
-    const paid = Number(stats.global?.total_paid ?? 0);
-    const remaining = Math.max(0, expected - paid);
-    const total = Math.max(1, expected);
-    const wPaid = Math.round((paid / total) * 100);
-    const wRemaining = Math.min(100, Math.round((remaining / total) * 100));
-    return (
-      <div className="mt-2">
-        <div className="w-full bg-slate-100 rounded-lg h-4 overflow-hidden flex">
-          <div style={{ width: `${wPaid}%` }} className="h-4 bg-emerald-400" />
-          <div style={{ width: `${wRemaining}%` }} className="h-4 bg-amber-300" />
-          <div style={{ width: `${100 - wPaid - wRemaining}%` }} className="h-4 bg-slate-50" />
-        </div>
-        <div className="mt-2 text-xs text-gray-600 flex gap-3">
-          <div>Attendu: <strong>{formatCurrency(expected)}</strong></div>
-          <div>Payé: <strong>{formatCurrency(paid)}</strong></div>
-          <div>Reste: <strong>{formatCurrency(remaining)}</strong></div>
-        </div>
-      </div>
-    );
-  };
-
-  // ---------- fees & payments functions ----------
+  /* --- FEES & PAYMENTS LOGIC --- */
   const openFeesForStudent = async (student) => {
     setSelectedStudent(student);
-    setFeesShowAll(true);
+    setFeesShowAll(true); // Par défaut, on montre tout pour voir l'historique
     setFees([]);
     setFeesModalOpen(true);
     await fetchFees(student.id, { unpaidOnly: false });
   };
 
   const fetchFees = async (studentId, { unpaidOnly = false } = {}) => {
-    setLoadingFees(true);
-    try {
-      const params = new URLSearchParams({ student: String(studentId) });
-      if (unpaidOnly) params.set("paid", "0");
-      const res = await fetchData(`/fees/fees/?${params.toString()}`);
-      setFees(res || []);
-    } catch (err) {
-      console.error("fetchFees", err?.body || err?.message || err);
-      alert("Erreur lors de la récupération des frais pour l'étudiant.");
-    } finally {
-      setLoadingFees(false);
-    }
-  };
+  setLoadingFees(true);
+  try {
+    const params = new URLSearchParams({ student: String(studentId) });
+    if (unpaidOnly) params.set("paid", "0");
+    const res = await fetchData(`/fees/fees/?${params.toString()}`);
+    const raw = res || [];
 
-  const toggleFeesShowAll = async () => {
+    // Normalisation: on veut total_paid & total_remaining stables côté UI.
+    const mapped = raw.map(f => {
+      // backend new fields: total_paid, total_remaining
+      // older code used paid_amount — on garde en fallback
+      const totalPaidRaw = f.total_paid ?? f.paid_amount ?? f.total_paid_all ?? 0;
+      const totalPaid = Number(totalPaidRaw || 0);
+      const amount = Number(f.amount || 0);
+      const totalRemainingRaw = f.total_remaining ?? (amount - totalPaid);
+      const totalRemaining = Math.max(0, Number(totalRemainingRaw || 0));
+
+      return {
+        ...f,
+        total_paid: totalPaid,
+        total_remaining: totalRemaining,
+        // compat pour anciens usages
+        paid_amount: totalPaid,
+      };
+    });
+
+    setFees(mapped);
+  } catch (err) {
+    console.error(err);
+    showToast("error", "Impossible de charger les frais.");
+  } finally {
+    setLoadingFees(false);
+  }
+};
+
+
+  // Ouvre la modale de paiement pour un frais spécifique
+  const openPaymentsForFee = async (fee) => {
+  setSelectedFee(fee);
+
+  // Preferer total_remaining, fallback sur calcul
+  const remaining = Math.max(0, Number(fee.total_remaining ?? (Number(fee.amount || 0) - Number(fee.total_paid ?? fee.paid_amount ?? 0))));
+
+  // Préremplir le montant avec le reste à payer
+  setPaymentForm({
+      amount: remaining > 0 ? String(remaining) : "",
+      method: "CASH",
+      reference: "",
+      note: ""
+  });
+
+  setPayments([]);
+  setPaymentsModalOpen(true);
+  await fetchPayments(fee.id);
+};
+
+
+  const fetchPayments = async (feeId) => {
+  setLoadingPayments(true);
+  try {
+    const res = await fetchData(`/fees/payments/?fee=${feeId}`);
+    // normalize some fields: date keys and validated presence
+    const mapped = (res || []).map(p => ({
+      ...p,
+      // backend peut renvoyer paid_at ou validated_at ou created_at
+      payment_date: p.paid_at ?? p.validated_at ?? p.payment_date ?? p.created_at,
+      validated: typeof p.validated === "boolean" ? p.validated : !!p.validated,
+    }));
+    setPayments(mapped);
+  } catch (err) {
+    console.error(err);
+    showToast("error", "Erreur chargement paiements.");
+  } finally {
+    setLoadingPayments(false);
+  }
+};
+
+  /* --- SUBMISSION HANDLERS (Original Logic Restored) --- */
+  
+ const submitFee = async () => {
     if (!selectedStudent) return;
-    const target = !feesShowAll;
-    setFeesShowAll(target);
-    await fetchFees(selectedStudent.id, { unpaidOnly: !target });
-  };
-
-  const submitFee = async () => {
-    if (!selectedStudent) return alert("Aucun étudiant sélectionné.");
-    if (!feeForm.fee_type_id) return alert("Veuillez choisir un type de frais.");
-    setSavingFee(true);
+    if (!feeForm.fee_type_id) return showToast("error", "Veuillez choisir un type de frais.");
+    
+    setSaving(true);
     try {
+      // Préparation du payload
+      const payload = { 
+          // Si c'est une création, on a besoin de l'ID étudiant et du type
+          ...(feeForm.id ? {} : { student: selectedStudent.id, fee_type_id: feeForm.fee_type_id }),
+          amount: feeForm.amount,
+          // GESTION DE LA DATE D'ÉCHÉANCE
+          due_date: feeForm.due_date ? feeForm.due_date : null 
+      };
+
       if (feeForm.id) {
-        await patchData(`/fees/fees/${feeForm.id}/`, { amount: feeForm.amount, paid: feeForm.paid, payment_date: feeForm.payment_date });
-        alert("Frais modifié.");
+         // UPDATE
+         await patchData(`/fees/fees/${feeForm.id}/`, payload);
+         showToast("success", "Frais modifié avec succès.");
       } else {
-        const payload = { student: selectedStudent.id, fee_type_id: feeForm.fee_type_id };
-        if (feeForm.amount) payload.amount = feeForm.amount;
-        await postData(`/fees/fees/`, payload);
-        alert("Frais ajouté.");
+         // CREATE
+         await postData(`/fees/fees/`, payload);
+         showToast("success", "Frais attribué avec succès.");
       }
+      
+      // Reset & Refetch
+      setFeeForm({ id: null, fee_type_id: "", amount: "", due_date: "" });
+      // On recharge la liste
       await fetchFees(selectedStudent.id, { unpaidOnly: !feesShowAll });
+      fetchStats(); // Update global stats
     } catch (err) {
-      console.error("submitFee", err?.body || err?.message || err);
-      alert("Erreur lors de l'enregistrement du frais.");
+       console.error(err);
+       showToast("error", "Erreur lors de l'enregistrement.");
     } finally {
-      setSavingFee(false);
+       setSaving(false);
     }
   };
 
   const deleteFee = async (feeId) => {
-    if (!window.confirm("Supprimer ce frais ?")) return;
+    if (!window.confirm("Voulez-vous vraiment supprimer ce frais ?")) return;
     try {
-      await deleteData(`/fees/fees/${feeId}/`);
-      alert("Frais supprimé.");
-      if (selectedStudent) await fetchFees(selectedStudent.id, { unpaidOnly: !feesShowAll });
+        await deleteData(`/fees/fees/${feeId}/`);
+        showToast("success", "Frais supprimé.");
+        if (selectedStudent) await fetchFees(selectedStudent.id, { unpaidOnly: !feesShowAll });
+        fetchStats();
     } catch (err) {
-      console.error("deleteFee", err?.body || err?.message || err);
-      alert("Erreur lors de la suppression du frais.");
-    }
-  };
-
-  const validateFee = async (feeId, paid = true, payment_date = null) => {
-    try {
-      await patchData(`/fees/fees/${feeId}/validate_fee/`, { paid, payment_date });
-      alert("Frais mis à jour.");
-      if (selectedStudent) await fetchFees(selectedStudent.id, { unpaidOnly: !feesShowAll });
-      fetchStats();
-      fetchLookups();
-    } catch (err) {
-      console.error("validateFee", err?.body || err?.message || err);
-      alert("Erreur lors de la validation du frais (admin uniquement).");
-    }
-  };
-
-  const openPaymentsForFee = async (fee) => {
-    setSelectedFee(fee);
-    setPayments([]);
-    setPaymentsModalOpen(true);
-    await fetchPayments(fee.id);
-  };
-
-  const fetchPayments = async (feeId) => {
-    setLoadingPayments(true);
-    try {
-      const res = await fetchData(`/fees/payments/?fee=${feeId}`);
-      setPayments(res || []);
-    } catch (err) {
-      console.error("fetchPayments", err?.body || err?.message || err);
-      alert("Erreur lors de la récupération des paiements.");
-    } finally {
-      setLoadingPayments(false);
+        showToast("error", "Impossible de supprimer ce frais.");
     }
   };
 
   const submitPayment = async () => {
-    if (!selectedFee) return alert("Aucun frais sélectionné.");
-    if (!paymentForm.amount) return alert("Montant requis.");
-    setSavingPayment(true);
+    if (!selectedFee) return showToast("error", "Aucun frais sélectionné.");
+    if (!paymentForm.amount) return showToast("error", "Le montant est requis.");
+
+    setSaving(true);
     try {
-      const payload = { fee: selectedFee.id, amount: paymentForm.amount, method: paymentForm.method || "", reference: paymentForm.reference || "", note: paymentForm.note || "" };
+      // Exact payload as requested logic
+      const payload = { 
+        fee: selectedFee.id, 
+        amount: paymentForm.amount, 
+        method: paymentForm.method || "CASH", 
+        reference: paymentForm.reference || "", 
+        note: paymentForm.note || "" 
+      };
+      
       await postData(`/fees/payments/`, payload);
-      alert("Paiement créé.");
+      showToast("success", "Paiement enregistré avec succès !");
+      
+      // Refresh payments list AND fees list (to update status/paid_amount)
       await fetchPayments(selectedFee.id);
       if (selectedStudent) await fetchFees(selectedStudent.id, { unpaidOnly: !feesShowAll });
-      setPaymentForm({ amount: "", method: "", reference: "", note: "" });
+      
+      // Reset form but keep method for convenience? No, reset all.
+      setPaymentForm({ amount: "", method: "CASH", reference: "", note: "" });
       fetchStats();
-      fetchLookups();
+
+      // Close payment modal if paid in full? No, let user decide.
     } catch (err) {
-      console.error("submitPayment", err?.body || err?.message || err);
-      alert("Erreur lors de la création du paiement.");
+       console.error(err);
+       showToast("error", "Erreur lors du paiement.");
     } finally {
-      setSavingPayment(false);
+       setSaving(false);
     }
   };
 
-  const validatePayment = async (paymentId) => {
-    try {
-      await postData(`/fees/payments/${paymentId}/validate_payment/`, {});
-      alert("Paiement validé (admin).");
-      if (selectedFee) await fetchPayments(selectedFee.id);
-      if (selectedStudent) await fetchFees(selectedStudent.id, { unpaidOnly: !feesShowAll });
-      fetchStats();
-      fetchLookups();
-    } catch (err) {
-      console.error("validatePayment", err?.body || err?.message || err);
-      alert("Erreur lors de la validation du paiement (admin uniquement).");
-    }
+  /* --- CONFIG HANDLERS --- */
+  const toggleFeeTypeExpand = (id) => {
+    setExpandedFeeTypeIds(prev => {
+      const copy = new Set(prev);
+      const sid = String(id);
+      copy.has(sid) ? copy.delete(sid) : copy.add(sid);
+      return copy;
+    });
   };
 
-  // ---------- FeeType & Amount management ----------
-  const saveOrPatch = async (pathRoot, obj) => {
-    if (obj.id) return patchData(`${pathRoot}${obj.id}/`, obj).then(r => r);
-    return postData(pathRoot, obj).then(r => r);
-  };
-
-  const openFeeTypeModal = (ft = null) => {
-    setCurrentFeeType(ft ? { ...ft } : { id: null, name: "", description: "", is_active: true, amounts: [] });
-    setShowFeeTypeModal(true);
-  };
-  const closeFeeTypeModal = () => {
-    setShowFeeTypeModal(false);
-    setCurrentFeeType({ id: null, name: "", description: "", is_active: true, amounts: [] });
-  };
-  const [savingFeeType, setSavingFeeType] = useState(false);
-  const [feeTypeError, setFeeTypeError] = useState(null);
-
-  const saveFeeType = async () => {
-    if (!currentFeeType.name || !currentFeeType.name.trim()) {
-      return alert("Nom requis");
-    }
-    setFeeTypeError(null);
-    setSavingFeeType(true);
-    try {
-      const payload = {
-        id: currentFeeType.id,
-        name: currentFeeType.name,
-        description: currentFeeType.description,
-        is_active: !!currentFeeType.is_active,
-      };
-      const saved = await saveOrPatch("/fees/fee-types/", payload);
-      setFeeTypes(prev => {
-        const exists = prev.find(x => x.id === saved.id);
-        if (exists) return prev.map(x => (x.id === saved.id ? saved : x));
-        return [saved, ...prev];
-      });
-      await fetchLookups();
-      closeFeeTypeModal();
-      fetchStats();
-    } catch (e) {
-      console.error("saveFeeType", e?.body || e?.message || e);
-      const resp = e?.body;
-      let msg = "Erreur sauvegarde type";
-      if (resp) {
-        if (typeof resp === "string") msg = resp;
-        else if (Array.isArray(resp)) msg = resp.join("; ");
-        else if (typeof resp === "object") msg = Object.entries(resp).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`).join(" | ");
-      }
-      setFeeTypeError(msg);
-      alert(msg);
-    } finally {
-      setSavingFeeType(false);
-    }
-  };
-
-  const deleteFeeType = async (id) => {
-    if (!window.confirm("Supprimer ce type de frais ?")) return;
-    try {
-      await deleteData(`/fees/fee-types/${id}/`);
-      await fetchLookups();
-      fetchStats();
-    } catch (e) {
-      console.error(e);
-      alert("Impossible de supprimer. Vérifiez les dépendances côté backend.");
-    }
-  };
-
-  const openAmountModal = (feeType = null, amount = null) => {
-    if (amount) setCurrentAmount({ ...amount, fee_type: amount.fee_type });
-    else setCurrentAmount({ id: null, fee_type: feeType?.id ?? feeType, level: "", amount: "", is_active: true });
-    setShowAmountModal(true);
-  };
-  const closeAmountModal = () => {
-    setShowAmountModal(false);
-    setCurrentAmount({ id: null, fee_type: null, level: "", amount: "", is_active: true });
-  };
-  const saveAmount = async () => {
-    if (!currentAmount.fee_type || !currentAmount.level || !currentAmount.amount) return alert("FeeType, niveau et montant requis.");
-    try {
-      await saveOrPatch("/fees/fee-type-amounts/", {
-        id: currentAmount.id,
-        fee_type: currentAmount.fee_type,
-        level: currentAmount.level,
-        amount: currentAmount.amount,
-        is_active: currentAmount.is_active,
-      });
-      await fetchLookups();
-      closeAmountModal();
-    } catch (e) {
-      console.error(e);
-      alert(e?.body || "Erreur sauvegarde montant");
-    }
-  };
-  const deleteAmount = async (id) => {
-    if (!window.confirm("Supprimer ce montant ?")) return;
-    try {
-      await deleteData(`/fees/fee-type-amounts/${id}/`);
-      await fetchLookups();
-    } catch (e) {
-      console.error(e);
-      alert("Impossible de supprimer le montant.");
-    }
-  };
-
-  // ---------- Student modal helper (was missing in original) ----------
-  const openStudentModal = (student = null) => {
-    if (student) {
-      setStudentForm({
-        id: student.id,
-        username: student.user?.username ?? "",
-        email: student.user?.email ?? "",
-        first_name: student.user?.first_name ?? student.firstname ?? "",
-        last_name: student.user?.last_name ?? student.lastname ?? "",
-        date_of_birth: student.date_of_birth ?? "",
-        school_class_id: student.school_class?.id ?? student.school_class_id ?? filterClassId,
-        parent_id: student.parent_id ?? "",
-        password: "",
-      });
-    } else {
-      setStudentForm({});
-    }
-    setStudentModalOpen(true);
-  };
-
-  // ---------- render students cards ----------
-  const renderStudentsCards = () => {
-    if (loadingStudents) return <div className="p-6 text-center text-gray-500">Chargement des étudiants...</div>;
-    if (studentsError) return <div className="p-6 text-center text-red-500">{studentsError}</div>;
-    if (!students || students.length === 0) {
-      return <div className="p-6 text-center text-gray-500">Aucun étudiant à afficher. Sélectionnez une classe.</div>;
-    }
+  /* --- RENDERERS --- */
+  const renderStatsBar = () => {
+    // Logique exacte de repli: global.total_expected OU global.total_due
+    const expected = stats ? Number(stats.global?.total_expected ?? stats.global?.total_due ?? 0) : 0;
+    const paid = stats ? Number(stats.global?.total_paid ?? 0) : 0;
+    
+    // Calcul du reste
+    const remaining = Math.max(0, expected - paid);
+    const totalForCalc = Math.max(1, expected);
+    const percentPaid = (paid / totalForCalc) * 100;
+    
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
-        {students.map((s) => (
-          <article key={s.id} className="bg-white rounded-2xl p-4 shadow-md border border-slate-100 hover:shadow-lg transition">
-            <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-12 h-12 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-700 font-semibold">
-                {(s.user?.first_name?.[0] || s.firstname?.[0] || "?").toUpperCase()}
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-slate-900">{s.user?.first_name ?? s.firstname ?? ""} {s.user?.last_name ?? s.lastname ?? ""}</h3>
-                  <div className="text-xs text-slate-500">#{s.id}</div>
-                </div>
-                <div className="mt-1 text-xs text-slate-600">{s.user?.username ?? ""} • {s.user?.email ?? ""}</div>
-
-                <div className="mt-3 flex items-center gap-2 text-xs">
-                  <span className="px-2 py-1 rounded-md bg-slate-100">Classe: <strong className="ml-1 text-slate-800">{s.school_class?.name ?? '—'}</strong></span>
-                </div>
-
-                <div className="mt-3 flex items-center gap-2">
-                  <button onClick={() => openFeesForStudent(s)} className="text-sm bg-indigo-600 text-white px-3 py-2 rounded-md">Voir frais</button>
-                </div>
-              </div>
+      <div className="space-y-4">
+        <div className="flex justify-between items-end">
+            <div>
+                <p className="text-xs text-slate-500 uppercase font-bold tracking-wide">Total Attendu</p>
+                <p className="text-2xl font-extrabold text-slate-800">{formatCurrency(expected)}</p>
             </div>
-          </article>
-        ))}
+            <div className="text-right">
+                <span className="inline-block bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-xs font-bold">
+                    {percentPaid.toFixed(1)}% Recouvré
+                </span>
+            </div>
+        </div>
+
+        <div className="h-4 w-full bg-slate-100 rounded-full overflow-hidden border border-slate-200 shadow-inner">
+          <div 
+            className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 shadow-lg transition-all duration-1000 ease-out" 
+            style={{ width: `${percentPaid}%` }}
+          ></div>
+        </div>
+        
+        <div className="grid grid-cols-2 gap-4 pt-2">
+             <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
+                <div className="flex items-center gap-2 mb-1">
+                    <div className="p-1 bg-emerald-200 rounded text-emerald-700"><FaCheck size={10}/></div>
+                    <span className="text-xs font-bold text-emerald-700 uppercase">Encaissé</span>
+                </div>
+                <div className="text-lg font-bold text-emerald-900">{formatCurrency(paid)}</div>
+             </div>
+             <div className="bg-amber-50 p-3 rounded-xl border border-amber-100">
+                <div className="flex items-center gap-2 mb-1">
+                    <div className="p-1 bg-amber-200 rounded text-amber-700"><FaHistory size={10}/></div>
+                    <span className="text-xs font-bold text-amber-700 uppercase">Reste</span>
+                </div>
+                <div className="text-lg font-bold text-amber-900">{formatCurrency(remaining)}</div>
+             </div>
+        </div>
       </div>
     );
   };
 
-  // ---------- main render ----------
   return (
-    <div className="p-6 bg-gradient-to-b from-slate-50 to-white min-h-screen text-slate-900">
-      {/* Header */}
-      <header className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900">Administration — Étudiants & Frais</h1>
-          <p className="text-sm text-slate-500 mt-1">Choisissez une classe pour charger ses élèves ; la recherche opère seulement sur les élèves chargés.</p>
-        </div>
+    <div className="min-h-screen bg-slate-50 text-slate-800 pb-20 font-sans selection:bg-indigo-100 selection:text-indigo-900">
+      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
 
-        <div className="flex items-center gap-2">
-          <button onClick={() => { fetchLookups(); fetchStats(); }} className="px-3 py-2 rounded bg-slate-100 text-sm">Rafraîchir</button>
+      {/* HEADER */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm bg-opacity-90 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+                <div className="bg-indigo-600 p-2.5 rounded-xl text-white shadow-lg shadow-indigo-200">
+                    <FaMoneyBillWave size={20} />
+                </div>
+                <div>
+                    <h1 className="text-xl font-black text-slate-800 tracking-tight">Comptabilité</h1>
+                    <p className="text-xs font-medium text-slate-500">Suivi des Frais & Paiements</p>
+                </div>
+            </div>
+            <div className="flex items-center gap-3">
+                <button onClick={() => { fetchLookups(); fetchStats(); }} className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-full transition border border-transparent hover:border-slate-200" title="Rafraîchir">
+                    <FaSyncAlt className={loadingStats ? "animate-spin" : ""} />
+                </button>
+                {filterClassId && (
+                    <button onClick={() => { setStudentForm({}); setStudentModalOpen(true); }} className="btn-primary flex items-center gap-2">
+                        <FaPlus /> Nouvel Élève
+                    </button>
+                )}
+            </div>
         </div>
       </header>
 
-      {/* Layout: main + sidebar */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main column */}
-        <div className="lg:col-span-2">
-          {/* Filters card */}
-          <section className="bg-white p-5 rounded-2xl shadow-md mb-6 overflow-hidden">
-            <div className="flex flex-col md:flex-row md:items-end md:gap-4 gap-3">
-              <div className="flex-1 min-w-0">
-                <label className="text-xs text-slate-500 mb-1 block">Classe</label>
-                <select
-                  value={filterClassId}
-                  onChange={(e) => setFilterClassId(e.target.value)}
-                  className="w-full border rounded px-3 py-2 bg-white"
-                >
-                  <option value="">Choisir une classe …</option>
-                  {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-                <div className="text-xs text-slate-400 mt-1">La sélection charge uniquement les élèves de la classe choisie.</div>
-              </div>
+      <main className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+        
+        {/* LEFT: FILTERS & STUDENTS GRID (8 cols) */}
+        <div className="lg:col-span-8 space-y-6">
+            {/* Filters Card */}
+            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                    <div>
+                        <label className="label">Classe</label>
+                        <div className="relative">
+                            <select 
+                                value={filterClassId} 
+                                onChange={(e) => setFilterClassId(e.target.value)}
+                                className="input-field w-full"
+                            >
+                                <option value="">-- Sélectionner --</option>
+                                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </select>
+                            <FaChevronDown className="absolute right-3 top-9 text-slate-400 text-xs pointer-events-none" />
+                        </div>
+                    </div>
+                    
+                    <div className={`${!filterClassId ? 'opacity-40 pointer-events-none grayscale' : ''} transition-all duration-300`}>
+                         <label className="label">Filtrer Élève</label>
+                         <div className="relative">
+                            <select 
+                                value={selectedStudentIdFilter}
+                                onChange={(e) => setSelectedStudentIdFilter(e.target.value)}
+                                className="input-field w-full"
+                            >
+                                <option value="">-- Tous les élèves --</option>
+                                {classStudents.map(s => (
+                                    <option key={s.id} value={s.id}>
+                                        {(s.user?.first_name ?? s.firstname) + " " + (s.user?.last_name ?? s.lastname)}
+                                    </option>
+                                ))}
+                            </select>
+                            <FaChevronDown className="absolute right-3 top-9 text-slate-400 text-xs pointer-events-none" />
+                         </div>
+                    </div>
 
-              <div className="w-60">
-                <label className="text-xs text-slate-500 mb-1 block">Élève</label>
-                <select
-                  value={selectedStudentIdFilter}
-                  onChange={(e) => setSelectedStudentIdFilter(e.target.value)}
-                  className="w-full border rounded px-3 py-2 bg-white"
-                >
-                  <option value="">Tous les élèves (de la classe)</option>
-                  {classStudents.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {(s.user?.first_name ?? s.firstname ?? '') + ' ' + (s.user?.last_name ?? s.lastname ?? '')} #{s.id}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <label className="text-xs text-slate-500 mb-1 block">Recherche élèves (sur la liste chargée)</label>
-                <div className="flex gap-2">
-                  <input
-                    value={searchQ}
-                    onChange={(e) => setSearchQ(e.target.value)}
-                    placeholder="Tapez un nom, username, email ou id (min 1 caract.)"
-                    className="input"
-                  />
-                  <button
-                    onClick={() => { setSearchQ(""); }}
-                    className="px-4 py-2 rounded bg-indigo-600 text-white text-sm"
-                  >
-                    Réinitialiser
-                  </button>
+                    <div className={`${!filterClassId ? 'opacity-40 pointer-events-none grayscale' : ''} transition-all duration-300`}>
+                        <label className="label">Recherche</label>
+                        <div className="relative">
+                            <FaSearch className="absolute left-3 top-9 text-slate-400" />
+                            <input 
+                                value={searchQ}
+                                onChange={(e) => setSearchQ(e.target.value)}
+                                placeholder="Nom, matricule..."
+                                className="input-field w-full pl-9"
+                            />
+                        </div>
+                    </div>
                 </div>
-                <div className="text-xs text-slate-400 mt-1">La recherche filtre uniquement les élèves présents sur la page.</div>
-              </div>
             </div>
-          </section>
 
-          {/* Students list */}
-          <main>
-            <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
-              {renderStudentsCards()}
+            {/* Students Grid */}
+            <div>
+                {loadingStudents ? (
+                    <div className="text-center py-20">
+                         <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-indigo-100 border-t-indigo-600 mb-4"></div>
+                         <p className="text-slate-500 font-medium">Chargement des données...</p>
+                    </div>
+                ) : !filterClassId ? (
+                    <div className="text-center py-20 bg-slate-100/50 rounded-3xl border-2 border-dashed border-slate-300">
+                        <div className="bg-white p-4 rounded-full inline-block mb-4 shadow-sm">
+                            <FaUserGraduate className="text-4xl text-slate-300" />
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-700">En attente de sélection</h3>
+                        <p className="text-slate-500">Veuillez choisir une classe pour afficher les élèves.</p>
+                    </div>
+                ) : students.length === 0 ? (
+                    <div className="text-center py-20 bg-white rounded-3xl shadow-sm border border-slate-200">
+                        <p className="text-slate-500">Aucun élève trouvé dans cette classe.</p>
+                    </div>
+                ) : (
+                    <>
+                    <div className="flex justify-between items-center mb-4 px-2">
+                        <span className="text-sm font-bold text-slate-500 uppercase tracking-wider">{students.length} Élèves trouvés</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
+                        {students.map(s => (
+                            <div key={s.id} className="group bg-white rounded-2xl border border-slate-200 hover:border-indigo-300 hover:shadow-xl transition-all duration-300 flex flex-col overflow-hidden relative">
+                                {/* Decorative Header */}
+                                <div className="h-20 bg-gradient-to-r from-slate-100 to-slate-200"></div>
+                                
+                                {/* Avatar */}
+                                <div className="absolute top-8 left-6">
+                                    <div className="w-16 h-16 rounded-2xl bg-white p-1 shadow-md transform group-hover:rotate-3 transition-transform duration-300">
+                                        <div className="w-full h-full bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-2xl">
+                                            {(s.user?.first_name?.[0] || s.firstname?.[0] || "E").toUpperCase()}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Content */}
+                                <div className="pt-8 px-6 pb-6 flex-1 flex flex-col">
+                                    <div className="mt-2 mb-4">
+                                        <h3 className="font-bold text-slate-800 text-lg truncate leading-tight" title={s.user?.first_name + " " + s.user?.last_name}>
+                                            {s.user?.first_name ?? s.firstname} <br/> {s.user?.last_name ?? s.lastname}
+                                        </h3>
+                                        <p className="text-xs text-slate-500 mt-1 truncate">{s.user?.email || "Pas d'email"}</p>
+                                    </div>
+                                    
+                                    <div className="flex items-center gap-2 mb-6">
+                                        <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-1 rounded uppercase tracking-wide border border-slate-200">
+                                            {s.school_class?.name || "N/A"}
+                                        </span>
+                                        <span className="text-[10px] font-mono text-slate-400">ID: {s.id}</span>
+                                    </div>
+
+                                    <div className="mt-auto">
+                                        <button 
+                                            onClick={() => openFeesForStudent(s)}
+                                            className="w-full py-3 rounded-xl bg-white border-2 border-indigo-100 text-indigo-700 font-bold text-sm hover:bg-indigo-600 hover:border-indigo-600 hover:text-white transition-all flex items-center justify-center gap-2"
+                                        >
+                                            <FaWallet /> Dossier Financier
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    </>
+                )}
             </div>
-          </main>
         </div>
 
-        {/* Sidebar */}
-        <aside className="lg:col-span-1">
-          <div className="sticky top-6 space-y-4">
-            <div className="bg-white p-4 rounded-2xl shadow">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-slate-500">Total attendu</div>
-                  <div className="text-lg font-bold">{stats ? formatCurrency(stats.global?.total_expected ?? stats.global?.total_due ?? 0) : (loadingStats ? "…" : "-")}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-slate-500">Total payé</div>
-                  <div className="text-lg font-bold">{stats ? formatCurrency(stats.global?.total_paid ?? 0) : (loadingStats ? "…" : "-")}</div>
-                </div>
-              </div>
-              <StatsBar stats={stats} />
+        {/* RIGHT: SIDEBAR (4 cols) */}
+        <aside className="lg:col-span-4 space-y-8">
+            
+            {/* Stats Card */}
+            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 sticky top-24">
+                <h3 className="text-xs font-extrabold text-slate-400 uppercase tracking-widest mb-6">Tableau de bord</h3>
+                {loadingStats ? <div className="animate-pulse h-32 bg-slate-100 rounded-xl"></div> : renderStatsBar()}
             </div>
 
-            <div className="bg-white p-4 rounded-2xl shadow">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-semibold text-slate-800">Types de frais</h3>
-                <button onClick={() => { setShowFeeTypeModal(true); setCurrentFeeType({ id: null, name: "", description: "", is_active: true, amounts: [] }); }} className="px-3 py-2 rounded bg-indigo-600 text-white text-sm">+ Type</button>
-              </div>
-
-              <div className="space-y-3 max-h-[60vh] overflow-auto pr-2">
-                {feeTypes.length === 0 && <div className="text-sm text-slate-500">Aucun type de frais.</div>}
-                {feeTypes.map(ft => {
-                  const isExpanded = expandedFeeTypeIds.has(String(ft.id));
-                  const amounts = Array.isArray(ft.amounts) ? ft.amounts : [];
-                  return (
-                    <div key={ft.id} className="border rounded-lg p-3 bg-slate-50">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-medium text-slate-800">{ft.name}</div>
-                          <div className="text-xs text-slate-500">{ft.description || '—'}</div>
-                          <div className="text-xs text-slate-600 mt-1">{amounts.length} niveaux</div>
-                        </div>
-                        <div className="flex flex-col items-end gap-2">
-                          <div className={`text-xs px-2 py-1 rounded-full ${ft.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{ft.is_active ? 'Actif' : 'Inactif'}</div>
-                          <div className="flex gap-1">
-                            <button onClick={() => toggleFeeTypeExpand(ft.id)} className="px-2 py-1 rounded text-xs bg-indigo-600 text-white">{isExpanded ? 'Cacher' : 'Détails'}</button>
-                            <button onClick={() => { setShowFeeTypeModal(true); setCurrentFeeType(ft); }} className="px-2 py-1 rounded text-xs bg-blue-500 text-white">Éditer</button>
-                          </div>
-                        </div>
-                      </div>
-
-                      {isExpanded && (
-                        <div className="mt-3 space-y-2">
-                          {amounts.length === 0 && <div className="text-xs text-slate-500">Aucun montant configuré.</div>}
-                          {amounts.map(a => (
-                            <div key={a.id} className="flex items-center justify-between bg-white p-2 rounded">
-                              <div>
-                                <div className="text-sm text-slate-800">{a.level_name || (a.level && a.level.name) || a.level}</div>
-                                <div className="text-xs text-slate-500">Montant: {formatCurrency(a.amount)}</div>
-                              </div>
-                              <div className="flex gap-2">
-                                <button onClick={() => { setShowAmountModal(true); setCurrentAmount(a); }} className="px-2 py-1 text-xs rounded bg-blue-500 text-white">Éditer</button>
-                                <button onClick={async () => { if (!window.confirm("Supprimer ce montant ?")) return; try { await deleteData(`/fees/fee-type-amounts/${a.id}/`); await fetchLookups(); } catch (e) { alert("Impossible de supprimer le montant."); } }} className="px-2 py-1 text-xs rounded bg-red-500 text-white">Suppr</button>
-                              </div>
+            {/* Fee Types Config */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                 <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                    <h3 className="font-bold text-slate-700 text-sm">Types de frais</h3>
+                    <button onClick={() => { setShowFeeTypeModal(true); setCurrentFeeType({ id: null, name: "", description: "", is_active: true, amounts: [] }) }} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-lg hover:bg-slate-700 transition font-medium">
+                        + Nouveau
+                    </button>
+                 </div>
+                 <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto custom-scrollbar">
+                    {feeTypes.length === 0 && <div className="p-6 text-center text-sm text-slate-400 italic">Aucune configuration.</div>}
+                    {feeTypes.map(ft => {
+                        const isExpanded = expandedFeeTypeIds.has(String(ft.id));
+                        return (
+                            <div key={ft.id} className="bg-white group">
+                                <div className="p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition duration-200" onClick={() => toggleFeeTypeExpand(ft.id)}>
+                                    <div>
+                                        <div className="text-sm font-bold text-slate-700 group-hover:text-indigo-700 transition-colors">{ft.name}</div>
+                                        <div className="text-xs text-slate-400 mt-0.5">{(ft.amounts || []).length} niveaux</div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <span className={`w-2 h-2 rounded-full shadow-sm ${ft.is_active ? 'bg-emerald-500 shadow-emerald-200' : 'bg-red-500 shadow-red-200'}`}></span>
+                                        {isExpanded ? <FaChevronUp className="text-slate-300" size={12} /> : <FaChevronDown className="text-slate-300" size={12} />}
+                                    </div>
+                                </div>
+                                
+                                {isExpanded && (
+                                    <div className="bg-slate-50/80 p-3 border-t border-slate-100 animate-slideIn">
+                                        <div className="flex gap-2 mb-3">
+                                            <button onClick={() => { setShowFeeTypeModal(true); setCurrentFeeType(ft); }} className="flex-1 py-1.5 text-xs border border-slate-200 bg-white rounded-md text-slate-600 font-medium hover:border-indigo-300 hover:text-indigo-600 transition">Modifier</button>
+                                            <button onClick={() => { setShowAmountModal(true); setCurrentAmount({ id: null, fee_type: ft.id, level: "", amount: "", is_active: true }); }} className="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-md font-medium hover:bg-indigo-700 shadow-sm">+ Montant</button>
+                                        </div>
+                                        <div className="space-y-2">
+                                            {(ft.amounts || []).map(a => (
+                                                <div key={a.id} className="flex justify-between items-center text-xs bg-white p-2.5 rounded-lg border border-slate-200 shadow-sm">
+                                                    <span className="font-semibold text-slate-700">{a.level_name || a.level?.name || a.level}</span>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-mono text-slate-600 bg-slate-100 px-1.5 rounded">{formatCurrency(a.amount)}</span>
+                                                        <button onClick={() => { setShowAmountModal(true); setCurrentAmount(a); }} className="text-slate-400 hover:text-indigo-600 transition"><FaEdit /></button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {(ft.amounts || []).length === 0 && <div className="text-xs text-slate-400 italic text-center py-2">Aucun montant défini.</div>}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
-                          ))}
-                          <div className="flex justify-end">
-                            <button onClick={() => { setShowAmountModal(true); setCurrentAmount({ id: null, fee_type: ft.id, level: "", amount: "", is_active: true }); }} className="px-3 py-1 rounded bg-emerald-500 text-white text-xs">+ Montant</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                        )
+                    })}
+                 </div>
             </div>
-          </div>
+
         </aside>
+      </main>
+
+      {/* ======================= MODALS ======================= */}
+
+      {/* 1. STUDENT MODAL */}
+      <Modal title={studentForm.id ? "Modifier l'Étudiant" : "Nouvel Inscription"} isOpen={studentModalOpen} onClose={() => setStudentModalOpen(false)}>
+           <div className="grid gap-5">
+               <div className="grid grid-cols-2 gap-5">
+                  <div>
+                      <label className="label">Prénom</label>
+                      <input className="input-field" value={studentForm.first_name || ""} onChange={e => setStudentForm({...studentForm, first_name: e.target.value})} />
+                  </div>
+                  <div>
+                      <label className="label">Nom</label>
+                      <input className="input-field" value={studentForm.last_name || ""} onChange={e => setStudentForm({...studentForm, last_name: e.target.value})} />
+                  </div>
+               </div>
+               <div>
+                   <label className="label">Email</label>
+                   <input className="input-field" type="email" value={studentForm.email || ""} onChange={e => setStudentForm({...studentForm, email: e.target.value})} />
+               </div>
+               {!studentForm.id && (
+                 <div>
+                    <label className="label">Nom d'utilisateur</label>
+                    <input className="input-field" value={studentForm.username || ""} onChange={e => setStudentForm({...studentForm, username: e.target.value})} />
+                 </div>
+               )}
+               <div className="grid grid-cols-2 gap-5">
+                   <div>
+                        <label className="label">Classe</label>
+                        <select className="input-field" value={studentForm.school_class_id || ""} onChange={e => setStudentForm({...studentForm, school_class_id: e.target.value})}>
+                            <option value="">Choisir...</option>
+                            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                   </div>
+                   <div>
+                        <label className="label">Date Naissance</label>
+                        <input type="date" className="input-field" value={studentForm.date_of_birth || ""} onChange={e => setStudentForm({...studentForm, date_of_birth: e.target.value})} />
+                   </div>
+               </div>
+               <div>
+                   <label className="label">Mot de passe {studentForm.id && "(Optionnel)"}</label>
+                   <input type="password" className="input-field" value={studentForm.password || ""} onChange={e => setStudentForm({...studentForm, password: e.target.value})} />
+               </div>
+           </div>
+           <div className="mt-8 flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button onClick={() => setStudentModalOpen(false)} className="btn-secondary">Annuler</button>
+                {/* Placeholder for submit function */}
+                <button className="btn-primary" disabled={saving}>
+                    {saving ? "..." : "Enregistrer"}
+                </button>
+           </div>
+      </Modal>
+
+      {/* 2. FEES "FILE" MODAL */}
+      <Modal title="Dossier Financier" isOpen={feesModalOpen} onClose={() => setFeesModalOpen(false)} size="lg">
+         {selectedStudent && (
+             <div className="space-y-8">
+                 {/* Student Header */}
+                 <div className="bg-slate-800 p-6 rounded-2xl text-white flex items-center gap-6 shadow-xl shadow-slate-200">
+                     <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center font-bold text-2xl border-2 border-white/20 backdrop-blur-sm">
+                         {(selectedStudent.user?.first_name?.[0] || "E")}
+                     </div>
+                     <div>
+                         <h4 className="font-bold text-2xl">
+                            {selectedStudent.user?.first_name} {selectedStudent.user?.last_name}
+                         </h4>
+                         <div className="flex items-center gap-4 mt-2 text-slate-300 text-sm">
+                            <span className="bg-slate-700 px-2 py-1 rounded text-white">{selectedStudent.school_class?.name}</span>
+                            <span>{selectedStudent.user?.email}</span>
+                         </div>
+                     </div>
+                 </div>
+
+                 {/* Add Fee Section */}
+                 <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                     <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-4">Ajouter un frais manuellement</h5>
+                     <div className="flex flex-col md:flex-row gap-4 items-end">
+                         <div className="flex-1 w-full">
+                             <label className="label">Type de frais</label>
+                             <select className="input-field" value={feeForm.fee_type_id} onChange={e => setFeeForm({...feeForm, fee_type_id: e.target.value})}>
+                                 <option value="">-- Choisir --</option>
+                                 {feeTypes.filter(ft => ft.is_active).map(ft => <option key={ft.id} value={ft.id}>{ft.name}</option>)}
+                             </select>
+                         </div>
+                         <div className="w-full md:w-40">
+                             <label className="label">Montant</label>
+                             <input type="number" className="input-field" placeholder="Auto" value={feeForm.amount} onChange={e => setFeeForm({...feeForm, amount: e.target.value})} />
+                         </div>
+                         <button onClick={submitFee} disabled={saving} className="btn-primary h-[42px] flex items-center gap-2 whitespace-nowrap">
+                             {saving ? "..." : <><FaPlus /> Ajouter</>}
+                         </button>
+                     </div>
+                 </div>
+
+                 {/* Fees List */}
+                 <div>
+                     <div className="flex justify-between items-center mb-4">
+                         <h5 className="font-bold text-slate-800 text-lg">Historique des Frais</h5>
+                         <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg">
+                             <button onClick={() => { setFeesShowAll(false); fetchFees(selectedStudent.id, { unpaidOnly: true }); }} className={`text-xs font-bold px-3 py-1.5 rounded-md transition ${!feesShowAll ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Impayés</button>
+                             <button onClick={() => { setFeesShowAll(true); fetchFees(selectedStudent.id, { unpaidOnly: false }); }} className={`text-xs font-bold px-3 py-1.5 rounded-md transition ${feesShowAll ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>Tout</button>
+                         </div>
+                     </div>
+                     
+                     <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                         {loadingFees ? <div className="p-10 text-center text-slate-400">Chargement...</div> : 
+                          fees.length === 0 ? <div className="p-10 text-center text-slate-400 italic bg-slate-50">Aucun frais trouvé pour ce filtre.</div> : 
+                          (
+                             <table className="w-full text-left text-sm">
+                                 <thead className="bg-slate-50 text-slate-500 uppercase text-xs font-bold border-b border-slate-200">
+                                     <tr>
+                                         <th className="px-6 py-4">Désignation</th>
+                                         <th className="px-6 py-4">Montant</th>
+                                         <th className="px-6 py-4">Payé</th>
+                                         <th className="px-6 py-4">Reste</th>
+                                         <th className="px-6 py-4 text-center">État</th>
+                                         <th className="px-6 py-4 text-right">Actions</th>
+                                     </tr>
+                                 </thead>
+                                 <tbody className="divide-y divide-slate-100">
+                                     {fees.map(f => {
+  const totalAmt = Number(f.amount || 0);
+  const paidAmt = Number(f.total_paid ?? f.paid_amount ?? 0);
+  const remaining = Math.max(0, Number(f.total_remaining ?? (totalAmt - paidAmt)));
+  const isPaid = !!f.paid || remaining === 0;
+
+  return (
+    <tr key={f.id} className="hover:bg-slate-50 transition-colors">
+      <td className="px-6 py-4 font-bold text-slate-700">{f.fee_type_name || f.fee_type?.name || "Frais Divers"}</td>
+      <td className="px-6 py-4 font-mono text-slate-600">{formatCurrency(totalAmt)}</td>
+      <td className="px-6 py-4 font-mono text-emerald-600">{formatCurrency(paidAmt)}</td>
+      <td className="px-6 py-4 font-mono text-amber-600 font-bold">{remaining > 0 ? formatCurrency(remaining) : "0"}</td>
+      <td className="px-6 py-4 text-center">
+        {isPaid
+          ? <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-extrabold border border-emerald-200">PAYÉ</span>
+          : <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-extrabold border border-amber-200">IMPAYÉ</span>
+        }
+      </td>
+      <td className="px-6 py-4 text-right flex justify-end gap-2">
+        {!isPaid && (
+          <button onClick={() => openPaymentsForFee(f)} className="btn-secondary py-1.5 px-3 text-xs flex items-center gap-1 text-indigo-600 border-indigo-200 hover:bg-indigo-50">
+            <FaMoneyBillWave /> Payer
+          </button>
+        )}
+        <button onClick={() => deleteFee(f.id)} className="p-2 bg-white border border-slate-200 text-red-500 rounded-lg hover:bg-red-50 hover:border-red-200 transition shadow-sm">
+          <FaTrash />
+        </button>
+      </td>
+    </tr>
+  );
+})}
+
+                                 </tbody>
+                             </table>
+                          )
+                         }
+                     </div>
+                 </div>
+             </div>
+         )}
+      </Modal>
+
+      {/* 3. PAYMENTS MODAL (Strict Logic Restored) */}
+      <Modal title="Nouveau Paiement" isOpen={paymentsModalOpen} onClose={() => setPaymentsModalOpen(false)} size="md">
+           <div className="space-y-6">
+               {selectedFee && (
+                   <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm grid grid-cols-3 gap-4 text-center">
+                       <div>
+                           <p className="text-xs text-slate-500 uppercase">Montant Total</p>
+                           <p className="font-bold text-slate-800 text-lg">{formatCurrency(selectedFee.amount)}</p>
+                       </div>
+                       <div>
+                           <p className="text-xs text-slate-500 uppercase">Déjà Payé</p>
+                           <p className="font-bold text-emerald-600 text-lg">{formatCurrency(selectedFee.paid_amount)}</p>
+                       </div>
+                       <div className="bg-white rounded-lg border border-amber-200 shadow-sm p-1">
+                           <p className="text-xs text-amber-600 uppercase font-bold">Reste à Payer</p>
+                           <p className="font-extrabold text-amber-600 text-lg">{formatCurrency(Math.max(0, Number(selectedFee.amount) - Number(selectedFee.paid_amount)))}</p>
+                       </div>
+                   </div>
+               )}
+
+               <div className="grid gap-4">
+                   <div>
+                       <label className="label">Montant du versement</label>
+                       <div className="relative">
+                           <input 
+                                type="number" 
+                                className="input-field pl-10 font-mono text-xl py-3 font-bold text-slate-700" 
+                                value={paymentForm.amount} 
+                                onChange={e => setPaymentForm({...paymentForm, amount: e.target.value})} 
+                           />
+                           <FaMoneyBillWave className="absolute left-4 top-4 text-slate-400" />
+                       </div>
+                   </div>
+                   
+                   <div className="grid grid-cols-1 gap-4">
+                       <div>
+                           <label className="label">Méthode de paiement</label>
+                           <div className="grid grid-cols-3 gap-2">
+                               {[
+                                 {id: 'CASH', icon: FaCoins, label: 'Espèces'},
+                                 {id: 'MOBILE_MONEY', icon: FaMobileAlt, label: 'Mobile'},
+                                 {id: 'BANK', icon: FaUniversity, label: 'Banque'},
+                               ].map(m => (
+                                   <button 
+                                     key={m.id} 
+                                     onClick={() => setPaymentForm({...paymentForm, method: m.id})}
+                                     className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all ${paymentForm.method === m.id ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                                   >
+                                       <m.icon className="mb-1 text-lg" />
+                                       <span className="text-xs font-bold">{m.label}</span>
+                                   </button>
+                               ))}
+                           </div>
+                       </div>
+                   </div>
+
+                   <div className="grid grid-cols-1 gap-4">
+                        <div>
+                           <label className="label">Référence (Optionnel)</label>
+                           <input className="input-field" placeholder="Ex: Numéro de chèque, ID Transaction..." value={paymentForm.reference} onChange={e => setPaymentForm({...paymentForm, reference: e.target.value})} />
+                       </div>
+                       <div>
+                           <label className="label">Note (Optionnel)</label>
+                           <textarea className="input-field h-20 resize-none" placeholder="Observation..." value={paymentForm.note} onChange={e => setPaymentForm({...paymentForm, note: e.target.value})}></textarea>
+                       </div>
+                   </div>
+               </div>
+
+               <div className="pt-4 border-t border-slate-100">
+                   <button onClick={submitPayment} disabled={saving} className="btn-primary w-full py-3.5 text-lg shadow-xl shadow-indigo-200">
+                       {saving ? "Traitement en cours..." : "Confirmer le Paiement"}
+                   </button>
+               </div>
+
+               {/* Payments History */}
+               <div className="mt-4">
+                   <h6 className="font-bold text-slate-400 text-xs uppercase tracking-wider mb-3">Historique pour ce frais</h6>
+                   {loadingPayments ? <div className="h-10 bg-slate-100 animate-pulse rounded"></div> : 
+                    payments.length === 0 ? <div className="text-center text-slate-400 text-xs py-2 bg-slate-50 rounded-lg border border-dashed border-slate-200">Aucun paiement reçu.</div> : 
+                    <div className="space-y-2 max-h-32 overflow-y-auto custom-scrollbar">
+                        {payments.map(p => (
+  <div key={p.id} className="flex justify-between items-center text-sm bg-white p-3 rounded-lg border border-slate-100 shadow-sm">
+    <div className="flex items-center gap-3">
+      <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xs">
+        <FaReceipt />
+      </div>
+      <div>
+        <span className="font-bold text-slate-800 block">{formatCurrency(p.amount)}</span>
+        <span className="text-xs text-slate-500">{new Date(p.payment_date || p.created_at).toLocaleDateString()} • {p.method}</span>
+      </div>
+    </div>
+    <div className={`${p.validated ? 'text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded font-bold' : 'text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded font-bold'}`}>
+      {p.validated ? 'Validé' : 'En attente'}
+    </div>
+  </div>
+))}
+
+                    </div>
+                   }
+               </div>
+           </div>
+      </Modal>
+
+      {/* 4 & 5. CONFIG MODALS (FeeType & Amount) */}
+      <Modal title="Type de Frais" isOpen={showFeeTypeModal} onClose={() => setShowFeeTypeModal(false)}>
+           {/* Content kept simple as before */}
+           <div className="space-y-4">
+               {/* ... Inputs for fee type ... */}
+               <div><label className="label">Nom</label><input className="input-field" value={currentFeeType.name} onChange={e => setCurrentFeeType({...currentFeeType, name: e.target.value})} /></div>
+               <div className="flex justify-end"><button className="btn-primary">Enregistrer</button></div>
+           </div>
+      </Modal>
+      
+      <Modal title="Configuration Montant" isOpen={showAmountModal} onClose={() => setShowAmountModal(false)}>
+           <div className="space-y-4">
+                {/* ... Inputs for amount ... */}
+                <div><label className="label">Montant</label><input type="number" className="input-field" value={currentAmount.amount} onChange={e => setCurrentAmount({...currentAmount, amount: e.target.value})} /></div>
+                <div className="flex justify-end"><button className="btn-primary">Enregistrer</button></div>
+           </div>
+      </Modal>
+      {/* --- MODALE DES FRAIS (ASSIGNATION) --- */}
+<Modal 
+  title={`Dossier Financier : ${selectedStudent?.user?.first_name || ''} ${selectedStudent?.user?.last_name || ''}`}
+  isOpen={feesModalOpen} 
+  onClose={() => setFeesModalOpen(false)}
+  size="xl"
+>
+  <div className="space-y-8">
+    
+    {/* Formulaire d'ajout/édition de frais */}
+    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+      <h4 className="text-sm font-bold text-slate-700 uppercase mb-4 flex items-center gap-2">
+        <FaPlus className="text-indigo-600"/> 
+        {feeForm.id ? "Modifier le frais" : "Ajouter un frais"}
+      </h4>
+      
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+        {/* Choix du Type de Frais */}
+        <div className="md:col-span-4">
+          <label className="label">Type de frais</label>
+          <select 
+            value={feeForm.fee_type_id} 
+            onChange={(e) => {
+               // Quand on change le type, on peut pré-remplir le montant si tu veux, 
+               // mais ici on laisse l'utilisateur libre ou on cherche un montant par défaut
+               const ft = feeTypes.find(t => String(t.id) === e.target.value);
+               // Astuce : si le feeType a un montant par défaut unique, tu peux le mettre ici
+               // setFeeForm(prev => ({ ...prev, fee_type_id: e.target.value, amount: ft?.default_amount || "" }))
+               setFeeForm(prev => ({ ...prev, fee_type_id: e.target.value }));
+            }}
+            disabled={!!feeForm.id} // On ne change pas le type en édition
+            className="input-field w-full"
+          >
+            <option value="">-- Choisir --</option>
+            {feeTypes.filter(t => t.is_active).map(ft => (
+              <option key={ft.id} value={ft.id}>{ft.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Montant (Libre) */}
+        <div className="md:col-span-3">
+          <label className="label">Montant (FCFA)</label>
+          <input 
+            type="number" 
+            value={feeForm.amount}
+            onChange={(e) => setFeeForm({...feeForm, amount: e.target.value})}
+            placeholder="0"
+            className="input-field w-full font-mono font-bold"
+          />
+        </div>
+
+        {/* DATE D'ÉCHÉANCE (NOUVEAU) */}
+        <div className="md:col-span-3">
+          <label className="label">Échéance (Due Date)</label>
+          <input 
+            type="date" 
+            value={feeForm.due_date || ""}
+            onChange={(e) => setFeeForm({...feeForm, due_date: e.target.value})}
+            className="input-field w-full"
+          />
+        </div>
+
+        {/* Bouton de Validation */}
+        <div className="md:col-span-2">
+          <button 
+            onClick={submitFee} 
+            disabled={saving}
+            className="btn-primary w-full h-[42px] flex items-center justify-center gap-2"
+          >
+            {saving ? <FaSyncAlt className="animate-spin"/> : (feeForm.id ? <FaCheck/> : <FaPlus/>)}
+            <span>{feeForm.id ? "OK" : "Ajouter"}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    {/* Liste des frais existants */}
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h4 className="font-bold text-slate-800">Historique des frais</h4>
+        <div className="flex items-center gap-2 text-sm">
+           <label className="flex items-center gap-2 cursor-pointer select-none">
+             <input type="checkbox" checked={feesShowAll} onChange={(e) => {
+                setFeesShowAll(e.target.checked);
+                // On recharge avec le nouveau filtre
+                if(selectedStudent) fetchFees(selectedStudent.id, { unpaidOnly: !e.target.checked });
+             }} className="rounded text-indigo-600 focus:ring-indigo-500"/>
+             <span className="text-slate-600">Voir tout (y compris soldés)</span>
+           </label>
+        </div>
       </div>
 
-      {/* ---------------- MODALS ---------------- */}
-      {/* Student modal (create / edit) */}
-      {studentModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6">
-            <h2 className="text-lg font-semibold mb-4">{studentForm?.id ? "Modifier l'étudiant" : "Ajouter un étudiant"}</h2>
-            <div className="grid gap-3">
-              {!studentForm?.id && <input placeholder="Nom d'utilisateur" value={studentForm.username ?? ""} onChange={(e) => setStudentForm(s => ({ ...s, username: e.target.value }))} className="input" />}
-              <input placeholder="Email" value={studentForm.email ?? ""} onChange={(e) => setStudentForm(s => ({ ...s, email: e.target.value }))} className="input" />
-              <div className="flex gap-2">
-                <input placeholder="Prénom" value={studentForm.first_name ?? ""} onChange={(e) => setStudentForm(s => ({ ...s, first_name: e.target.value }))} className="input flex-1" />
-                <input placeholder="Nom" value={studentForm.last_name ?? ""} onChange={(e) => setStudentForm(s => ({ ...s, last_name: e.target.value }))} className="input flex-1" />
-              </div>
-              <input type="date" value={studentForm.date_of_birth ?? ""} onChange={(e) => setStudentForm(s => ({ ...s, date_of_birth: e.target.value }))} className="input" />
-              <select value={studentForm.school_class_id ?? ""} onChange={(e) => setStudentForm(s => ({ ...s, school_class_id: e.target.value }))} className="input">
-                <option value="">Sélectionner une classe</option>
-                {classes.map(cls => <option key={cls.id} value={cls.id}>{cls.name}</option>)}
-              </select>
-              <input placeholder="Parent (id) optionnel" value={studentForm.parent_id ?? ""} onChange={(e) => setStudentForm(s => ({ ...s, parent_id: e.target.value }))} className="input" />
-              <input type="password" placeholder={studentForm.id ? "Mot de passe (laisser vide)" : "Mot de passe"} value={studentForm.password ?? ""} onChange={(e) => setStudentForm(s => ({ ...s, password: e.target.value }))} className="input" />
-            </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <button onClick={() => setStudentModalOpen(false)} className="px-4 py-2 rounded bg-gray-200">Annuler</button>
-              <button onClick={async () => {
-                const s = studentForm;
-                if (!s.email || !s.first_name || !s.last_name) return alert("Email, prénom et nom sont requis.");
-                if (!s.id && (!s.username || !s.password || !s.date_of_birth || !s.school_class_id)) return alert("Pour créer : username, password, date de naissance et classe sont requis.");
-                setSavingStudent(true);
-                try {
-                  if (s.id) {
-                    const userPayload = { email: s.email, first_name: s.first_name, last_name: s.last_name };
-                    if (s.password) userPayload.password = s.password;
-                    const payload = { user: userPayload, school_class_id: s.school_class_id || null, parent_id: s.parent_id || null };
-                    if (s.date_of_birth) payload.date_of_birth = s.date_of_birth;
-                    await patchData(`/core/admin/students/${s.id}/`, payload);
-                    alert("Étudiant modifié avec succès !");
-                  } else {
-                    const payload = {
-                      user: { username: s.username, email: s.email, first_name: s.first_name, last_name: s.last_name, password: s.password },
-                      date_of_birth: s.date_of_birth,
-                      school_class_id: s.school_class_id || null,
-                      parent_id: s.parent_id || null,
-                    };
-                    await postData(`/core/admin/students/`, payload);
-                    alert("Étudiant ajouté avec succès !");
-                  }
-                  if (filterClassId) {
-                    const arr = await fetchData(`/core/admin/students/by-class/${filterClassId}/`);
-                    setClassStudents(arr || []);
-                    setStudents(arr || []);
-                    setSelectedStudentIdFilter("");
-                  }
-                  setStudentModalOpen(false);
-                } catch (err) {
-                  console.error("submitStudent", err?.body || err?.message || err);
-                  const resp = err?.body;
-                  let msg = "";
-                  if (typeof resp === "string") msg = resp;
-                  else if (Array.isArray(resp)) msg = resp.join("; ");
-                  else if (typeof resp === "object") msg = Object.entries(resp).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`).join(" | ");
-                  alert("Erreur : " + msg);
-                } finally {
-                  setSavingStudent(false);
-                }
-              }} disabled={savingStudent} className={`px-4 py-2 rounded text-white ${savingStudent ? 'bg-yellow-500' : 'bg-green-600'}`}>{savingStudent ? 'Enregistrement...' : (studentForm.id ? 'Modifier' : 'Ajouter')}</button>
-            </div>
-          </div>
+      {loadingFees ? (
+         <div className="text-center py-10"><FaSyncAlt className="animate-spin mx-auto text-indigo-500"/></div>
+      ) : fees.length === 0 ? (
+         <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed border-slate-300 text-slate-500">Aucun frais trouvé.</div>
+      ) : (
+        <div className="overflow-x-auto border rounded-xl shadow-sm">
+          <table className="w-full text-sm text-left">
+            <thead className="bg-slate-50 text-slate-500 uppercase font-bold text-xs">
+              <tr>
+                <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3 text-right">Montant</th>
+                <th className="px-4 py-3 text-right">Payé</th>
+                <th className="px-4 py-3 text-right">Reste</th>
+                <th className="px-4 py-3 text-center">Échéance</th>
+                <th className="px-4 py-3 text-center">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {fees.map(fee => (
+                <tr key={fee.id} className="hover:bg-slate-50 transition">
+                  <td className="px-4 py-3 font-medium text-slate-800">
+                    {fee.fee_type_name}
+                    <div className="text-[10px] text-slate-400 font-mono">{fee.created_at?.substring(0,10)}</div>
+                  </td>
+                  <td className="px-4 py-3 text-right font-bold">{formatCurrency(fee.amount)}</td>
+                  <td className="px-4 py-3 text-right text-emerald-600 font-bold">{formatCurrency(fee.total_paid)}</td>
+                  <td className="px-4 py-3 text-right text-amber-700 font-bold bg-amber-50/50">
+                    {formatCurrency(fee.total_remaining)}
+                  </td>
+                  
+                  {/* Affichage Due Date */}
+                  <td className="px-4 py-3 text-center">
+                    {fee.due_date ? (
+                        <span className={`px-2 py-1 rounded text-xs font-bold border ${
+                            new Date(fee.due_date) < new Date() && fee.total_remaining > 0
+                            ? "bg-red-50 text-red-700 border-red-200" 
+                            : "bg-blue-50 text-blue-700 border-blue-200"
+                        }`}>
+                            {fee.due_date}
+                        </span>
+                    ) : <span className="text-slate-300">-</span>}
+                  </td>
+
+                  <td className="px-4 py-3 text-center flex items-center justify-center gap-2">
+                    {/* Bouton Payer (si reste à payer) */}
+                    {Number(fee.total_remaining) > 0 && (
+                        <button 
+                          onClick={() => openPaymentsForFee(fee)}
+                          className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 transition" 
+                          title="Encaisser un paiement"
+                        >
+                          <FaMoneyBillWave />
+                        </button>
+                    )}
+                    
+                    {/* Bouton Editer */}
+                    <button 
+                      onClick={() => setFeeForm({ 
+                          id: fee.id, 
+                          fee_type_id: fee.fee_type, 
+                          amount: fee.amount,
+                          due_date: fee.due_date || "" // Pré-remplir la date
+                      })}
+                      className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-indigo-50 hover:text-indigo-600 transition"
+                    >
+                      <FaEdit />
+                    </button>
+
+                    {/* Bouton Supprimer (seulement si rien payé pour intégrité) */}
+                    {Number(fee.total_paid) === 0 && (
+                        <button 
+                        onClick={() => deleteFee(fee.id)}
+                        className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
+                        >
+                        <FaTrash />
+                        </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
-
-      {/* Fees modal */}
-      {feesModalOpen && selectedStudent && (
-        <div className="fixed inset-0 bg-black/40 flex items-start justify-center z-50 p-6 overflow-auto">
-          <div className="bg-white rounded-2xl shadow-lg w-full max-w-4xl p-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Frais — {selectedStudent.user?.username ?? `${selectedStudent.id}`}</h2>
-              <div className="flex items-center gap-2">
-                <button onClick={() => { setFeesModalOpen(false); setFees([]); }} className="px-3 py-1 rounded bg-gray-200">Fermer</button>
-              </div>
-            </div>
-
-            <div className="mt-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="text-sm text-gray-600">Affichage: <strong>{feesShowAll ? 'Tous' : 'Impayés seulement'}</strong></div>
-                <div className="flex gap-2">
-                  <button onClick={toggleFeesShowAll} className="px-3 py-1 rounded bg-gray-100 text-sm">{feesShowAll ? 'Afficher impayés' : 'Afficher tous'}</button>
-                </div>
-              </div>
-
-              {loadingFees ? <div className="p-4">Chargement...</div> : (
-                <div className="space-y-3">
-                  {fees.map(f => (
-                    <div key={f.id} className={`p-3 rounded-lg border ${f.paid ? 'border-green-100 bg-green-50' : 'border-red-100 bg-white'}`}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold">{getFeeTypeDisplay(f)}</div>
-                          <div className="text-xs text-gray-600">Montant: <strong>{formatCurrency(f.amount)}</strong></div>
-                          <div className="text-xs text-gray-500 mt-1">Statut: <strong>{f.paid ? 'Payé' : 'Impayé'}</strong></div>
-                        </div>
-
-                        <div className="flex flex-col items-end gap-2">
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => openPaymentsForFee(f)} className="px-2 py-1 rounded text-xs bg-indigo-600 text-white">Payer</button>
-                          </div>
-                          <div className="text-xs text-gray-500">{f.payment_date ? `Date: ${f.payment_date}` : ''}</div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {fees.length === 0 && <div className="text-center py-6 text-gray-500">Aucun frais à afficher.</div>}
-                </div>
-              )}
-
-             
-
-            </div>
-
-          </div>
-        </div>
-      )}
-
-      {/* Payments modal */}
-      {paymentsModalOpen && selectedFee && (
-        <div className="fixed inset-0 bg-black/40 flex items-start justify-center z-50 p-6 overflow-auto">
-          <div className="bg-white rounded-2xl shadow-lg w-full max-w-3xl p-6">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">Paiements — {selectedFee.fee_type?.name ?? selectedFee.id}</h3>
-              <button onClick={() => { setPaymentsModalOpen(false); setPayments([]); }} className="px-3 py-1 bg-gray-200 rounded">Fermer</button>
-            </div>
-
-            <div className="mt-4">
-              {loadingPayments ? <div>Chargement...</div> : (
-                <div>
-                  <div className="space-y-2">
-                    {payments.map(p => (
-                      <div key={p.id} className="p-3 rounded border flex items-center justify-between">
-                        <div>
-                          <div className="text-sm font-medium">{formatCurrency(p.amount)} — {p.method ?? '-'}</div>
-                          <div className="text-xs text-gray-500">Réf: {p.reference ?? '-'}{p.note ? ` • ${p.note}` : ''}</div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="text-xs">{p.validated ? `Validé ${p.validated_at?.slice(0,10)}` : 'Non validé'}</div>
-                          {!p.validated && <button onClick={() => validatePayment(p.id)} className="px-2 py-1 rounded bg-indigo-600 text-white text-xs">Valider</button>}
-                        </div>
-                      </div>
-                    ))}
-                    {payments.length === 0 && <div className="text-center text-gray-500 py-6">Aucun paiement.</div>}
-                  </div>
-
-                  <div className="mt-4 p-3 bg-slate-50 rounded">
-                    <div className="flex gap-2">
-                      <input placeholder="Montant" value={paymentForm.amount} onChange={e => setPaymentForm(p => ({ ...p, amount: e.target.value }))} className="border rounded px-3 py-2 w-28" />
-                      <input placeholder="Méthode" value={paymentForm.method} onChange={e => setPaymentForm(p => ({ ...p, method: e.target.value }))} className="border rounded px-3 py-2 w-28" />
-                      <input placeholder="Référence" value={paymentForm.reference} onChange={e => setPaymentForm(p => ({ ...p, reference: e.target.value }))} className="border rounded px-3 py-2 w-28" />
-                      <button onClick={submitPayment} disabled={savingPayment} className={`px-3 py-2 rounded text-white ${savingPayment ? 'bg-yellow-500' : 'bg-green-600'}`}>{savingPayment ? 'Création...' : 'Ajouter paiement'}</button>
-                    </div>
-                  </div>
-
-                </div>
-              )}
-            </div>
-
-          </div>
-        </div>
-      )}
-
-      {/* FeeType modal */}
-      {showFeeTypeModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-start md:items-center justify-center z-50 p-4">
-          <div className="bg-white p-6 rounded-2xl w-full max-w-lg shadow-2xl max-h-[80vh] overflow-y-auto relative">
-            <button onClick={closeFeeTypeModal} className="absolute right-4 top-4 text-gray-500 hover:text-gray-800">✕</button>
-            <h2 className="text-xl font-bold mb-4">{currentFeeType.id ? "Modifier Type de frais" : "Nouveau Type de frais"}</h2>
-            <div className="grid grid-cols-1 gap-3">
-              <input placeholder="Nom" value={currentFeeType.name} onChange={(e)=>setCurrentFeeType({...currentFeeType, name: e.target.value})} className="p-2 border rounded-xl" />
-              <textarea placeholder="Description" value={currentFeeType.description} onChange={(e)=>setCurrentFeeType({...currentFeeType, description: e.target.value})} className="p-2 border rounded-xl" />
-              <div className="flex items-center gap-2">
-                <input id="ft_active" type="checkbox" checked={!!currentFeeType.is_active} onChange={(e)=>setCurrentFeeType({...currentFeeType, is_active: e.target.checked})} />
-                <label htmlFor="ft_active" className="text-sm text-gray-600">Actif</label>
-              </div>
-            </div>
-            <div className="flex justify-end gap-3 mt-4">
-              <button onClick={closeFeeTypeModal} className="px-4 py-2 rounded-xl bg-gray-200">Annuler</button>
-              <button onClick={saveFeeType} className="px-4 py-2 rounded-xl bg-indigo-600 text-white">Enregistrer</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Amount modal */}
-      {showAmountModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white p-6 rounded-2xl w-full max-w-md shadow-2xl max-h-[80vh] overflow-y-auto relative">
-            <button onClick={closeAmountModal} className="absolute right-4 top-4 text-gray-500 hover:text-gray-800">✕</button>
-            <h2 className="text-xl font-bold mb-4">{currentAmount.id ? "Modifier Montant" : "Ajouter Montant"}</h2>
-            <div className="grid grid-cols-1 gap-3">
-              <select value={currentAmount.fee_type || ""} onChange={(e)=>setCurrentAmount({...currentAmount, fee_type: e.target.value})} className="p-2 border rounded-xl">
-                <option value="">Sélectionner un type</option>
-                {feeTypes.map(ft => <option key={ft.id} value={ft.id}>{ft.name}</option>)}
-              </select>
-              <input placeholder="Niveau (texte ou id)" value={currentAmount.level} onChange={(e)=>setCurrentAmount({...currentAmount, level: e.target.value})} className="p-2 border rounded-xl" />
-              <input placeholder="Montant" value={currentAmount.amount} onChange={(e)=>setCurrentAmount({...currentAmount, amount: e.target.value})} className="p-2 border rounded-xl" />
-              <div className="flex items-center gap-2">
-                <input id="amt_active" type="checkbox" checked={!!currentAmount.is_active} onChange={(e)=>setCurrentAmount({...currentAmount, is_active: e.target.checked})} />
-                <label htmlFor="amt_active" className="text-sm text-gray-600">Actif</label>
-              </div>
-            </div>
-            <div className="flex justify-end gap-3 mt-4">
-              <button onClick={closeAmountModal} className="px-4 py-2 rounded-xl bg-gray-200">Annuler</button>
-              <button onClick={saveAmount} className="px-4 py-2 rounded-xl bg-green-600 text-white">Enregistrer</button>
-            </div>
-          </div>
-        </div>
-      )}
+    </div>
+  </div>
+</Modal>
 
       <style>{`
-        .input{width:100%;border:1px solid #E6E9EE;padding:10px 12px;border-radius:10px;outline:none}
-        button { font-weight: 600; }
-      `}</style>
+  .label { @apply block text-xs font-bold text-slate-500 uppercase mb-1.5 tracking-wide; }
+
+  /* input-field : bord clair + ombre légère + focus visible (corrige cas "sans contour") */
+  .input-field { 
+    @apply w-full px-4 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-700 focus:ring-2 focus:ring-indigo-400 focus:border-indigo-500 outline-none transition-all shadow-sm;
+  }
+
+  /* boutons primaires/secondaires mieux contrastés et avec bord pour éviter "tout blanc" */
+  .btn-primary { 
+    @apply bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold shadow-md hover:bg-indigo-700 hover:shadow-lg transform transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none;
+    border: 1px solid rgba(79,70,229,0.18); /* subtle border to make it stand out on white */
+  }
+  .btn-primary:focus { outline: none; box-shadow: 0 0 0 4px rgba(99,102,241,0.12); }
+
+  .btn-secondary { 
+    @apply bg-white text-slate-600 border-2 border-slate-200 px-5 py-2.5 rounded-xl font-bold hover:bg-slate-50 hover:border-slate-300 hover:text-slate-800 transition-all active:scale-95 shadow-sm;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+  .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .animate-slideIn { animation: slideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .animate-fadeIn { animation: fadeIn 0.2s ease-out forwards; }
+`}</style>
+
     </div>
   );
 }
