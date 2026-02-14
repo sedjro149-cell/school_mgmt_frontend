@@ -1,10 +1,19 @@
 // src/api.js
-const RAW_BASE = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
-const BASE = RAW_BASE.replace(/\/+$/, ""); // remove trailing slash(s)
+const RAW_BASE = import.meta.env.VITE_BACKEND_URL || "https://johnnie-epiphloedal-decretively.ngrok-free.dev";
+const BASE = RAW_BASE.replace(/\/+$/, ""); 
+
+/**
+ * SOLUTION CENTRALISÉE POUR NGROK
+ * On ajoute ce header pour bypasser l'écran d'avertissement de ngrok.
+ */
+function getCommonHeaders() {
+  return {
+    "ngrok-skip-browser-warning": "69420",
+  };
+}
 
 function buildUrl(endpoint) {
   if (!endpoint) endpoint = "/";
-  // if it's already an absolute URL, return as-is
   if (/^https?:\/\//i.test(endpoint)) return endpoint;
   const ep = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
   const withApi = ep.startsWith("/api/") || ep === "/api" ? ep : `/api${ep}`;
@@ -47,11 +56,10 @@ async function handleResponse(res) {
   return body;
 }
 
-/* exported fetch helpers */
 export async function fetchData(endpoint) {
   const url = buildUrl(endpoint);
   const res = await fetch(url, {
-    headers: { ...getAuthHeader() },
+    headers: { ...getCommonHeaders(), ...getAuthHeader() },
   });
   return handleResponse(res);
 }
@@ -60,7 +68,11 @@ export async function postData(endpoint, data) {
   const url = buildUrl(endpoint);
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeader() },
+    headers: { 
+      "Content-Type": "application/json", 
+      ...getCommonHeaders(), 
+      ...getAuthHeader() 
+    },
     body: JSON.stringify(data),
   });
   return handleResponse(res);
@@ -70,7 +82,11 @@ export async function putData(endpoint, data) {
   const url = buildUrl(endpoint);
   const res = await fetch(url, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", ...getAuthHeader() },
+    headers: { 
+      "Content-Type": "application/json", 
+      ...getCommonHeaders(), 
+      ...getAuthHeader() 
+    },
     body: JSON.stringify(data),
   });
   return handleResponse(res);
@@ -80,46 +96,53 @@ export async function patchData(endpoint, data) {
   const url = buildUrl(endpoint);
   const res = await fetch(url, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json", ...getAuthHeader() },
+    headers: { 
+      "Content-Type": "application/json", 
+      ...getCommonHeaders(), 
+      ...getAuthHeader() 
+    },
     body: JSON.stringify(data),
   });
   return handleResponse(res);
 }
-// Dans src/api.js, ajoutez cette fonction juste après postFormData
+
 export async function patchFormData(endpoint, formData) {
-  const url = buildUrl(endpoint);
-  const res = await fetch(url, {
-    method: "PATCH",
-    headers: { ...getAuthHeader() }, // do NOT set Content-Type; browser sets boundary
-    body: formData,
-  });
-  return handleResponse(res);
-}
-export async function deleteData(endpoint) {
   const url = buildUrl(endpoint);
   const res = await fetch(url, {
-    method: "DELETE",
-    headers: { ...getAuthHeader() },
+    method: "PATCH",
+    headers: { ...getCommonHeaders(), ...getAuthHeader() },
+    body: formData,
   });
   return handleResponse(res);
 }
 
-// for file uploads (FormData)
+export async function deleteData(endpoint) {
+  const url = buildUrl(endpoint);
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: { ...getCommonHeaders(), ...getAuthHeader() },
+  });
+  return handleResponse(res);
+}
+
 export async function postFormData(endpoint, formData) {
   const url = buildUrl(endpoint);
   const res = await fetch(url, {
     method: "POST",
-    headers: { ...getAuthHeader() }, // do NOT set Content-Type; browser sets boundary
+    headers: { ...getCommonHeaders(), ...getAuthHeader() },
     body: formData,
   });
   return handleResponse(res);
 }
 
 export async function loginAndStore(username, password) {
-  const url = buildUrl("/token/"); // becomes /api/token/
+  const url = buildUrl("/token/"); 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { 
+      "Content-Type": "application/json",
+      ...getCommonHeaders() 
+    },
     body: JSON.stringify({ username, password }),
   });
   const body = await handleResponse(res);
@@ -127,7 +150,6 @@ export async function loginAndStore(username, password) {
   return body;
 }
 
-// optional helper
 export function getBase() {
   return BASE;
 }

@@ -169,7 +169,7 @@ const Sidebar = ({ navigate }) => (
     <div className="p-6">
       <div className="flex items-center gap-3 mb-6">
         <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-pink-500 rounded-lg flex items-center justify-center text-white font-bold text-lg">
-          ia
+          S3
         </div>
         <div>
           <h3 className="text-lg font-bold text-gray-900">Scol360</h3>
