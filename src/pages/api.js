@@ -1,5 +1,5 @@
 // src/api.js
-const RAW_BASE = import.meta.env.VITE_BACKEND_URL || "https://johnnie-epiphloedal-decretively.ngrok-free.dev";
+const RAW_BASE = import.meta.env.VITE_BACKEND_URL 
 const BASE = RAW_BASE.replace(/\/+$/, ""); 
 
 /**
