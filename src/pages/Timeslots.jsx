@@ -42,6 +42,7 @@ export default function TimeSlots() {
     try {
       const data = await fetchData("/academics/time-slots/");
       // API may return array or paginated; handle both
+      //Api son babièèèère
       const arr = Array.isArray(data) ? data : data?.results ?? [];
       setSlots(arr);
     } catch (err) {
