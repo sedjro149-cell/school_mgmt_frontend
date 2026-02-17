@@ -1,5 +1,5 @@
 // src/api.js
-const RAW_BASE = import.meta.env.VITE_BACKEND_URL 
+const RAW_BASE = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 const BASE = RAW_BASE.replace(/\/+$/, ""); 
 
 /**
@@ -7,8 +7,11 @@ const BASE = RAW_BASE.replace(/\/+$/, "");
  * On ajoute ce header pour bypasser l'écran d'avertissement de ngrok.
  */
 function getCommonHeaders() {
-  return {};
+  return {
+    
+  };
 }
+
 function buildUrl(endpoint) {
   if (!endpoint) endpoint = "/";
   if (/^https?:\/\//i.test(endpoint)) return endpoint;
