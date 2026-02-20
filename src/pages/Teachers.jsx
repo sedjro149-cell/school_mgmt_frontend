@@ -11,7 +11,9 @@ import {
   FaEnvelope,
   FaIdCard,
   FaTimes,
-  FaCheck
+  FaCheck,
+  FaChevronLeft,
+  FaChevronRight
 } from "react-icons/fa";
 import { fetchData, postData, patchData, deleteData } from "./api";
 
@@ -20,21 +22,21 @@ import { fetchData, postData, patchData, deleteData } from "./api";
 const Avatar = ({ firstName, lastName }) => {
   const initials = `${(firstName || "?")[0]}${(lastName || "?")[0]}`.toUpperCase();
   return (
-    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center font-bold text-lg shadow-md ring-2 ring-white">
+    <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-bold text-sm shadow-md ring-2 ring-white">
       {initials}
     </div>
   );
 };
 
 const SubjectBadge = ({ subject }) => (
-  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-100">
-    <FaBookOpen size={10} />
+  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold border border-emerald-100">
+    <FaBookOpen size={11} />
     {subject || "Non assigné"}
   </span>
 );
 
 const ClassTag = ({ name }) => (
-  <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-medium border border-slate-200">
+  <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[11px] font-medium border border-slate-200 mr-1">
     {name}
   </span>
 );
@@ -56,17 +58,27 @@ const Modal = ({ isOpen, onClose, title, children }) => {
   );
 };
 
+/* --- TEACHERS COMPONENT (updated: server-side search + pagination + list view) --- */
+
 const Teachers = () => {
   /* --- STATE --- */
-  const [teachers, setTeachers] = useState([]);
+  const [teachers, setTeachers] = useState([]); // current page results
   const [subjects, setSubjects] = useState([]);
   const [classes, setClasses] = useState([]);
-  
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  
-  // UI
+
+  // pagination & search
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [count, setCount] = useState(0);
+  const [nextUrl, setNextUrl] = useState(null);
+  const [prevUrl, setPrevUrl] = useState(null);
+
+  // UI
   const [showModal, setShowModal] = useState(false);
   const [currentTeacher, setCurrentTeacher] = useState(null);
 
@@ -76,42 +88,80 @@ const Teachers = () => {
     subjectId: "", classIds: []
   });
 
-  /* --- FETCHERS --- */
-  const fetchAll = async () => {
+  /* --- HELPERS --- */
+
+  // Build teachers endpoint with params
+  const teachersEndpoint = (p = 1, q = "", ps = pageSize) => {
+    const base = `/core/admin/teachers/?page=${p}&page_size=${ps}`;
+    return q ? `${base}&search=${encodeURIComponent(q)}` : base;
+  };
+
+  const fetchTeachers = async (p = page, q = debouncedQuery) => {
     setLoading(true);
     try {
-      const [tData, sData, cData] = await Promise.all([
-        fetchData("/core/admin/teachers/"),
-        fetchData("/academics/subjects/"),
-        fetchData("/academics/school-classes/")
-      ]);
-      setTeachers(Array.isArray(tData) ? tData : tData?.results || []);
-      setSubjects(Array.isArray(sData) ? sData : sData?.results || []);
-      setClasses(Array.isArray(cData) ? cData : cData?.results || []);
+      const res = await fetchData(teachersEndpoint(p, q));
+      // DRF paginated response: {count, next, previous, results}
+      if (res && typeof res === "object" && Array.isArray(res.results)) {
+        setTeachers(res.results);
+        setCount(res.count ?? 0);
+        setNextUrl(res.next ?? null);
+        setPrevUrl(res.previous ?? null);
+      } else if (Array.isArray(res)) {
+        // backward compatibility: some endpoints might return array — handle it
+        setTeachers(res);
+        setCount(res.length);
+        setNextUrl(null);
+        setPrevUrl(null);
+      } else {
+        setTeachers([]);
+        setCount(0);
+        setNextUrl(null);
+        setPrevUrl(null);
+      }
     } catch (err) {
-      console.error(err);
-      alert("Erreur chargement données");
+      console.error("Erreur fetchTeachers:", err);
+      alert("Erreur lors du chargement des enseignants.");
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  const fetchSubjectsAndClasses = async () => {
+    try {
+      const [sData, cData] = await Promise.all([
+        fetchData("/academics/subjects/"),
+        fetchData("/academics/school-classes/")
+      ]);
+      setSubjects(Array.isArray(sData) ? sData : sData?.results || []);
+      setClasses(Array.isArray(cData) ? cData : cData?.results || []);
+    } catch (err) {
+      console.error("Erreur fetch subjects/classes:", err);
+      alert("Erreur chargement matières / classes");
+    }
+  };
 
-  /* --- FILTERING --- */
-  const filteredTeachers = useMemo(() => {
-    const q = query.toLowerCase().trim();
-    if (!q) return teachers;
-    return teachers.filter(t => {
-      const text = [
-        t.user?.username, t.user?.email, t.user?.first_name, t.user?.last_name,
-        t.subject?.name
-      ].join(" ").toLowerCase();
-      return text.includes(q);
-    });
-  }, [teachers, query]);
+  // load both once on mount
+  useEffect(() => {
+    fetchSubjectsAndClasses();
+  }, []);
+
+  // debounce query input (300ms)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedQuery(query.trim());
+      setPage(1); // on new search, reset to page 1
+    }, 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  // fetch teachers whenever page, pageSize or debouncedQuery change
+  useEffect(() => {
+    fetchTeachers(page, debouncedQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, pageSize, debouncedQuery]);
 
   /* --- ACTIONS --- */
+
   const openModal = (t = null) => {
     setCurrentTeacher(t);
     setFormData({
@@ -128,7 +178,7 @@ const Teachers = () => {
 
   const handleSubmit = async () => {
     if (!formData.email || !formData.firstName || !formData.lastName) return alert("Champs requis manquants.");
-    
+
     const payload = {
       user: { email: formData.email, first_name: formData.firstName, last_name: formData.lastName },
       subject_id: formData.subjectId ? Number(formData.subjectId) : null,
@@ -150,7 +200,10 @@ const Teachers = () => {
       } else {
         await postData("/core/admin/teachers/", payload);
       }
-      await fetchAll();
+      // refresh teachers current page
+      await fetchTeachers(page, debouncedQuery);
+      // refresh subjects/classes just in case
+      await fetchSubjectsAndClasses();
       setShowModal(false);
     } catch (err) {
       console.error(err);
@@ -164,14 +217,33 @@ const Teachers = () => {
     if (!window.confirm("Supprimer cet enseignant ?")) return;
     try {
       await deleteData(`/core/admin/teachers/${id}/`);
-      await fetchAll();
-    } catch (err) { alert("Erreur suppression."); }
+      // after delete, if current page becomes empty and previous page exists, go back
+      const isLastItemOnPage = teachers.length === 1 && page > 1;
+      const newPage = isLastItemOnPage ? page - 1 : page;
+      setPage(newPage);
+      await fetchTeachers(newPage, debouncedQuery);
+    } catch (err) {
+      console.error(err);
+      alert("Erreur suppression.");
+    }
   };
+
+  const handleRefresh = async () => {
+    setQuery("");
+    setPage(1);
+    await fetchSubjectsAndClasses();
+    await fetchTeachers(1, "");
+  };
+
+  /* --- RENDER HELPERS --- */
+
+  const totalPages = useMemo(() => (pageSize > 0 ? Math.ceil(count / pageSize) : 1), [count, pageSize]);
+
+  const pageInfoText = `${Math.min((page - 1) * pageSize + 1, count || 0)} - ${Math.min(page * pageSize, count || 0)} sur ${count}`;
 
   /* --- RENDER --- */
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-20 font-sans">
-      
       {/* HEADER */}
       <div className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm bg-opacity-90 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
@@ -186,8 +258,12 @@ const Teachers = () => {
                </div>
             </div>
             <div className="flex items-center gap-3">
-              <button onClick={() => { setQuery(""); fetchAll(); }} className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-full transition"><FaSyncAlt className={loading ? "animate-spin" : ""} /></button>
-              <button onClick={() => openModal()} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg shadow-md shadow-emerald-200 flex items-center gap-2 text-sm font-medium transition-transform active:scale-95"><FaPlus /> Ajouter</button>
+              <button onClick={handleRefresh} className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-full transition">
+                <FaSyncAlt className={loading ? "animate-spin" : ""} />
+              </button>
+              <button onClick={() => openModal()} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg shadow-md shadow-emerald-200 flex items-center gap-2 text-sm font-medium transition-transform active:scale-95">
+                <FaPlus /> Ajouter
+              </button>
             </div>
           </div>
 
@@ -208,70 +284,99 @@ const Teachers = () => {
 
       {/* CONTENT */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* PAGINATION CONTROLS (top) */}
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <div className="text-sm text-slate-600">{pageInfoText}</div>
+          <div className="flex items-center gap-2">
+            <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }} className="input text-sm">
+              <option value={10}>10 / page</option>
+              <option value={20}>20 / page</option>
+              <option value={50}>50 / page</option>
+            </select>
+
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="p-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">
+              <FaChevronLeft />
+            </button>
+            <div className="px-3 text-sm font-medium">Page {page} / {Math.max(1, totalPages)}</div>
+            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="p-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">
+              <FaChevronRight />
+            </button>
+          </div>
+        </div>
+
         {loading ? (
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
-             {[...Array(6)].map((_, i) => <div key={i} className="h-48 bg-gray-200 rounded-2xl"></div>)}
+           <div className="space-y-3 animate-pulse">
+             {[...Array(6)].map((_, i) => (
+               <div key={i} className="h-16 bg-gray-200 rounded-xl"></div>
+             ))}
            </div>
-        ) : filteredTeachers.length === 0 ? (
+        ) : teachers.length === 0 ? (
            <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300">
              <div className="bg-slate-50 p-4 rounded-full inline-block mb-4"><FaChalkboardTeacher className="text-4xl text-slate-300" /></div>
              <h3 className="text-lg font-bold text-slate-700">Aucun enseignant trouvé</h3>
            </div>
         ) : (
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-             {filteredTeachers.map(t => {
-                const name = `${t.user?.first_name || ""} ${t.user?.last_name || ""}`.trim() || "Utilisateur";
-                
-                return (
-                  <div key={t.id} className="group bg-white rounded-2xl p-5 shadow-sm border border-slate-200 hover:shadow-lg hover:border-emerald-200 transition-all duration-300 relative flex flex-col">
-                    
-                    {/* Actions */}
-                    <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                      <button onClick={() => openModal(t)} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition"><FaEdit /></button>
-                      <button onClick={() => handleDelete(t.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition"><FaTrash /></button>
-                    </div>
+           <div className="space-y-3">
+             {teachers.map(t => {
+               const name = `${t.user?.first_name || ""} ${t.user?.last_name || ""}`.trim() || "Utilisateur";
+               return (
+                 <div key={t.id} className="bg-white rounded-2xl p-3 shadow-sm border border-slate-200 hover:shadow-lg transition-all flex items-center gap-4">
+                   <Avatar firstName={t.user?.first_name} lastName={t.user?.last_name} />
 
-                    {/* Header */}
-                    <div className="flex items-start gap-4 mb-4">
-                       <Avatar firstName={t.user?.first_name} lastName={t.user?.last_name} />
-                       <div className="flex-1 min-w-0">
-                         <h3 className="font-bold text-slate-800 truncate text-lg leading-tight" title={name}>{name}</h3>
-                         <div className="flex items-center gap-2 mt-1">
-                            <SubjectBadge subject={t.subject?.name} />
+                   <div className="flex-1 min-w-0">
+                     <div className="flex items-start justify-between gap-4">
+                       <div className="min-w-0">
+                         <div className="flex items-center gap-3">
+                           <h3 className="font-bold text-slate-800 truncate" title={name}>{name}</h3>
+                           <div className="ml-2">{t.subject ? <SubjectBadge subject={t.subject.name} /> : null}</div>
+                         </div>
+                         <div className="text-xs text-slate-500 mt-1 truncate">
+                           <span title={t.user?.email}><FaEnvelope className="inline mr-1 text-[10px]" /> {t.user?.email || "—"}</span>
+                           <span className="mx-2">•</span>
+                           <span title={t.user?.username}><FaIdCard className="inline mr-1 text-[10px]" /> {t.user?.username}</span>
                          </div>
                        </div>
-                    </div>
 
-                    {/* Info Blocks */}
-                    <div className="space-y-3 flex-1">
-                       <div className="flex items-center gap-3 text-sm text-slate-600">
-                          <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-400"><FaEnvelope size={12}/></div>
-                          <span className="truncate" title={t.user?.email}>{t.user?.email || "—"}</span>
+                       {/* Actions */}
+                       <div className="flex items-center gap-2">
+                         <button onClick={() => openModal(t)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition"><FaEdit /></button>
+                         <button onClick={() => handleDelete(t.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition"><FaTrash /></button>
                        </div>
-                       <div className="flex items-center gap-3 text-sm text-slate-600">
-                          <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-400"><FaIdCard size={12}/></div>
-                          <span className="truncate">{t.user?.username}</span>
-                       </div>
-                    </div>
+                     </div>
 
-                    {/* Classes Footer */}
-                    <div className="mt-5 pt-4 border-t border-slate-100">
-                       <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
-                          <FaUsers /> Classes Attribuées ({(t.classes || []).length})
+                     {/* Classes */}
+                     <div className="mt-2 flex items-center gap-2 text-xs text-slate-600">
+                       <FaUsers className="text-[12px]" />
+                       <div className="flex flex-wrap">
+                         {(t.classes || []).length > 0 ? (
+                           t.classes.map(c => <ClassTag key={c.id} name={c.name} />)
+                         ) : (
+                           <span className="text-xs text-slate-400 italic">Aucune classe</span>
+                         )}
                        </div>
-                       <div className="flex flex-wrap gap-1.5">
-                          {(t.classes || []).length > 0 ? (
-                             t.classes.map(c => <ClassTag key={c.id} name={c.name} />)
-                          ) : (
-                             <span className="text-xs text-slate-400 italic">Aucune classe</span>
-                          )}
-                       </div>
-                    </div>
-                  </div>
-                );
+                     </div>
+                   </div>
+                 </div>
+               );
              })}
            </div>
         )}
+
+        {/* PAGINATION CONTROLS (bottom) */}
+        <div className="mt-6 flex items-center justify-between gap-4">
+          <div className="text-sm text-slate-600">{pageInfoText}</div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setPage(1)} disabled={page === 1} className="px-3 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">Début</button>
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="p-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">
+              <FaChevronLeft />
+            </button>
+            <div className="px-3 text-sm font-medium">Page {page} / {Math.max(1, totalPages)}</div>
+            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="p-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">
+              <FaChevronRight />
+            </button>
+            <button onClick={() => setPage(totalPages)} disabled={page === totalPages} className="px-3 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">Fin</button>
+          </div>
+        </div>
       </main>
 
       {/* MODAL FORM */}
@@ -283,7 +388,7 @@ const Teachers = () => {
                  <input className="input" value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} placeholder="Auto si vide" />
                </div>
             )}
-            
+
             <div className="grid grid-cols-2 gap-4">
                <div><label className="label">Prénom *</label><input className="input" value={formData.firstName} onChange={e => setFormData({...formData, firstName: e.target.value})} /></div>
                <div><label className="label">Nom *</label><input className="input" value={formData.lastName} onChange={e => setFormData({...formData, lastName: e.target.value})} /></div>

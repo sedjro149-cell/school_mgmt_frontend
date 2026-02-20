@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useRef } from"react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { FaEdit, FaTrash, FaPlus, FaFilter, FaPrint, FaFilePdf, FaClock, FaMapMarkerAlt } from "react-icons/fa";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
@@ -208,7 +208,10 @@ export default function Timetable() {
     );
   };
 
-  const dayColWidth = 140 * Math.min(Math.max(selectedClasses.length, 1), 3);
+  // --- FIX: colonne jour à largeur fixe pour éviter l'étirement horizontal ---
+  const dayColWidth = 140; // largeur fixe par jour en px (ne dépend plus du nombre de classes sélectionnées)
+  const totalMinWidth = 100 + weekdays.length * dayColWidth;
+  const columnsStyleString = ['100px', ...Array(weekdays.length).fill(`${dayColWidth}px`)].join(' ');
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen font-sans">
@@ -234,13 +237,13 @@ export default function Timetable() {
 
       <div ref={pdfRef} className="bg-white rounded-xl shadow-sm overflow-x-auto p-4">
         {loading ? <p>Chargement...</p> : (
-          <div style={{ minWidth: 100 + weekdays.length * dayColWidth }}>
-            <div className="grid border-b bg-gray-50" style={{ gridTemplateColumns: `100px repeat(${weekdays.length}, 1fr)` }}>
+          <div style={{ minWidth: totalMinWidth }}>
+            <div className="grid border-b bg-gray-50" style={{ gridTemplateColumns: columnsStyleString }}>
               <div className="p-3 text-sm font-bold">Heure</div>
               {weekdays.map(d => <div key={d.value} className="p-3 text-sm font-bold text-center border-l">{d.label}</div>)}
             </div>
             {timeLabels.map((tl, idx) => (
-              <div key={idx} className="grid border-b min-h-[80px]" style={{ gridTemplateColumns: `100px repeat(${weekdays.length}, 1fr)` }}>
+              <div key={idx} className="grid border-b min-h-[80px]" style={{ gridTemplateColumns: columnsStyleString }}>
                 <div className="p-2 text-[11px] font-medium bg-gray-50 flex items-center justify-center">{tl}</div>
                 {weekdays.map(d => (
                   <div key={d.value} className="p-1 border-l">

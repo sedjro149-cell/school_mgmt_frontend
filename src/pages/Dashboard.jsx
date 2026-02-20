@@ -46,6 +46,8 @@ const sections = [
       { title: "Bulletins", link: "/academics/reportcards", icon: FaRegChartBar },
       { title: "Annonces", link: "/academics/anouncementmgmt", icon: FaRegChartBar },
       { title: "Présence", link: "/academics/absences", icon: FaLayerGroup },
+      { title: "Gestion Emplois du temps", link: "/academics/timetable-manager", icon: FaLayerGroup },
+      { title: "Edition Emplois du temps", link: " /academics/timetable-editor", icon: FaLayerGroup },
 
 
     ],
