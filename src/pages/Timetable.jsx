@@ -40,10 +40,11 @@ function timeToMinutes(t) {
 }
 
 export default function Timetable() {
-  const [entries, setEntries] = useState([]);
+  // entriesMap : { [classId]: [entry, ...] }
+  const [entriesMap, setEntriesMap] = useState({});
   const [classes, setClasses] = useState([]);
   const [timeSlots, setTimeSlots] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // global loading for initial data or ongoing fetches
   const [error, setError] = useState("");
   const [selectedClasses, setSelectedClasses] = useState([]);
   const [showModal, setShowModal] = useState(false);
@@ -54,30 +55,95 @@ export default function Timetable() {
   const [filterDay, setFilterDay] = useState("");
   const pdfRef = useRef(null);
 
-  const fetchAll = async () => {
+  // Set to track classes currently being fetched (to show spinner per action if needed)
+  const [fetchingClassIds, setFetchingClassIds] = useState(new Set());
+
+  // Récupère uniquement classes + time-slots au début (plus léger)
+  const fetchInitial = async () => {
     setLoading(true);
     setError("");
     try {
-      const [entriesData, classesData, slotsData] = await Promise.all([
-        fetchData("/academics/timetable/"),
+      const [classesData, slotsData] = await Promise.all([
         fetchData("/academics/school-classes/"),
         fetchData("/academics/time-slots/"),
       ]);
-      // Avec pagination désactivée, DRF renvoie un tableau direct
-      setEntries(Array.isArray(entriesData) ? entriesData : (entriesData?.results || []));
       setClasses(Array.isArray(classesData) ? classesData : (classesData?.results || []));
       const sortedSlots = (Array.isArray(slotsData) ? slotsData : (slotsData?.results || []))
         .slice().sort((a,b) => (a.day - b.day) || (String(a.start_time).localeCompare(String(b.start_time))));
       setTimeSlots(sortedSlots);
+      // Reset entriesMap: keep previous cache? we'll keep it to avoid wiping fetched classes earlier
+      // but if you want to clear cache on refresh, uncomment next line:
+      // setEntriesMap({});
     } catch (err) {
       console.error(err);
-      setError("Erreur de chargement de l'API.");
+      setError("Erreur de chargement initiale de l'API.");
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { fetchInitial(); }, []);
+
+  // Fetch entries for a single class id and cache them
+  const fetchClassEntries = async (classId) => {
+    if (!classId) return;
+    // avoid duplicate fetches
+    if (fetchingClassIds.has(classId)) return;
+    // if already cached, don't refetch
+    if (entriesMap[classId] && entriesMap[classId].length) return;
+
+    setFetchingClassIds(prev => new Set(prev).add(classId));
+    setLoading(true);
+    try {
+      const data = await fetchData(`/academics/timetable/?school_class=${classId}`);
+      const entriesForClass = Array.isArray(data) ? data : (data?.results || []);
+      setEntriesMap(prev => ({ ...prev, [classId]: entriesForClass }));
+    } catch (err) {
+      console.error(err);
+      setError("Erreur de chargement de l'emploi du temps pour la classe.");
+    } finally {
+      setFetchingClassIds(prev => {
+        const next = new Set(prev);
+        next.delete(classId);
+        return next;
+      });
+      setLoading(false);
+    }
+  };
+
+  // Refresh all currently selected classes (useful after create/update/delete)
+  const refreshSelectedClasses = async () => {
+    const ids = selectedClasses.slice();
+    if (!ids.length) return;
+    setLoading(true);
+    setError("");
+    try {
+      await Promise.all(ids.map(id => {
+        // force refetch by clearing cache first
+        setEntriesMap(prev => ({ ...prev, [id]: [] }));
+        return fetchClassEntries(id);
+      }));
+    } catch (err) {
+      console.error(err);
+      setError("Erreur de rafraîchissement des emplois du temps.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Combine entries from entriesMap for selected classes
+  const combinedEntries = useMemo(() => {
+    const selected = selectedClasses.length ? selectedClasses : [];
+    let arr = [];
+    if (selected.length) {
+      selected.forEach(id => {
+        const list = entriesMap[id] || [];
+        if (Array.isArray(list)) arr = arr.concat(list);
+      });
+    }
+    // If no selected classes -> empty array (we avoid fetching everything)
+    return arr;
+  }, [entriesMap, selectedClasses]);
 
   const timeLabels = useMemo(() => {
     const map = new Map();
@@ -91,10 +157,12 @@ export default function Timetable() {
       .map(x => x.label);
   }, [timeSlots]);
 
+  const isFilterActive = !!(searchText || filterTeacher || filterDay);
+  // selected for filtering: when selectedClasses exist use them, when not and filters active we can optionally search across cached classes only.
+  // Here: to avoid heavy fetching, if no selected classes but filter active we will search across cached entries only.
   const displayedEntries = useMemo(() => {
-    const isFilterActive = !!(searchText || filterTeacher || filterDay);
-    const selected = selectedClasses.length ? selectedClasses : (isFilterActive ? classes.map(c => c.id) : []);
-    return entries.filter(e => {
+    const selected = selectedClasses.length ? selectedClasses : (isFilterActive ? Object.keys(entriesMap).map(Number) : []);
+    return combinedEntries.filter(e => {
       if (!selected.includes(e.school_class)) return false;
       if (searchText) {
         const q = searchText.toLowerCase();
@@ -105,7 +173,7 @@ export default function Timetable() {
       if (filterDay && String(e.weekday) !== String(filterDay)) return false;
       return true;
     });
-  }, [entries, selectedClasses, searchText, filterTeacher, filterDay, classes]);
+  }, [combinedEntries, selectedClasses, searchText, filterTeacher, filterDay, entriesMap, isFilterActive]);
 
   const grid = useMemo(() => {
     const g = {};
@@ -136,10 +204,20 @@ export default function Timetable() {
     return order.filter(id => present.has(id));
   }, [displayedEntries, selectedClasses, classes]);
 
+  // Toggle selection: when adding a class, fetch its entries if not cached
   const handleClassToggle = (id) => {
     setSelectedClasses(prev => {
-      if (prev.includes(id)) return prev.filter(p => p !== id);
-      return prev.length >= 3 ? [...prev.slice(1, 3), id] : [...prev, id];
+      if (prev.includes(id)) {
+        // deselect : keep cached data but remove from selected list
+        return prev.filter(p => p !== id);
+      }
+      // select : add (limit to 3)
+      const next = prev.length >= 3 ? [...prev.slice(1, 3), id] : [...prev, id];
+      // fetch the entries for the newly added class if not present
+      // do it after state update (but we can call fetch here)
+      // We call fetchClassEntries regardless; inside it will avoid double fetch if cached
+      fetchClassEntries(id);
+      return next;
     });
   };
 
@@ -156,14 +234,25 @@ export default function Timetable() {
     try {
       if (form.id) await patchData(`/academics/timetable/${form.id}/`, form);
       else await postData(`/academics/timetable/`, form);
-      await fetchAll();
+      // refresh selected classes (ensures updated entries)
+      await refreshSelectedClasses();
       setShowModal(false);
-    } catch (err) { alert("Erreur d'enregistrement"); }
+    } catch (err) { 
+      console.error(err);
+      alert("Erreur d'enregistrement"); 
+    }
   };
 
   const deleteEntry = async (id) => {
     if (!confirm("Supprimer ?")) return;
-    try { await deleteData(`/academics/timetable/${id}/`); await fetchAll(); } catch (err) { alert("Erreur suppression"); }
+    try {
+      await deleteData(`/academics/timetable/${id}/`);
+      // refresh selected classes to reflect deletion
+      await refreshSelectedClasses();
+    } catch (err) { 
+      console.error(err);
+      alert("Erreur suppression"); 
+    }
   };
 
   const exportPDF = async () => {
@@ -227,11 +316,20 @@ export default function Timetable() {
         <div className="flex flex-wrap gap-4 items-center">
           <span className="text-sm font-semibold">Classes :</span>
           {classes.map(c => (
-            <button key={c.id} onClick={() => handleClassToggle(c.id)} className={`px-3 py-1 rounded-full text-xs border transition ${selectedClasses.includes(c.id) ? "bg-slate-800 text-white" : "bg-white text-gray-600"}`}>
+            <button
+              key={c.id}
+              onClick={() => handleClassToggle(c.id)}
+              className={`px-3 py-1 rounded-full text-xs border transition ${selectedClasses.includes(c.id) ? "bg-slate-800 text-white" : "bg-white text-gray-600"}`}
+            >
               {c.name}
+              {/* show small spinner if this class is being fetched */}
+              {fetchingClassIds.has(c.id) && <span className="ml-2 text-xs">⏳</span>}
             </button>
           ))}
           <input type="text" placeholder="Recherche..." className="border p-2 rounded-lg text-sm ml-auto" value={searchText} onChange={(e) => setSearchText(e.target.value)} />
+        </div>
+        <div className="mt-2 text-xs text-gray-500">
+          {selectedClasses.length === 0 ? "Sélectionne une ou plusieurs classes pour charger leur emploi du temps." : `${selectedClasses.length} classe(s) sélectionnée(s)` }
         </div>
       </div>
 
@@ -296,6 +394,7 @@ export default function Timetable() {
     </div>
   );
 }
+
 /*// Timetable.jsx
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import axios from "axios";
