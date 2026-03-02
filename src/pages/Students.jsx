@@ -3,24 +3,24 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   FaSearch, FaPlus, FaEdit, FaTrash, FaSyncAlt,
   FaUserGraduate, FaFilter, FaChevronLeft, FaChevronRight,
-  FaTimes, FaMars, FaVenus, FaPhone, FaUpload
+  FaTimes, FaMars, FaVenus, FaPhone, FaUpload,
+  FaCheckCircle, FaTimesCircle, FaExclamationTriangle,
 } from "react-icons/fa";
-import { fetchData, postData, patchData, deleteData } from "./api";
+import { fetchData, postData, patchData, deleteData, postFormData } from "./api";
 
-/* --- COMPOSANTS UI --- */
+// ---------------------------------------------------------------------------
+// Composants UI partagés
+// ---------------------------------------------------------------------------
+
 const Avatar = ({ firstName, lastName, color }) => {
-  const f = firstName ? firstName[0] : "?";
-  const l = lastName ? lastName[0] : "?";
-  const initials = (f + l).toUpperCase();
-
-  const bgColors = {
+  const initials = ((firstName?.[0] || "?") + (lastName?.[0] || "?")).toUpperCase();
+  const palette = {
     indigo: "bg-indigo-100 text-indigo-600",
-    pink: "bg-pink-100 text-pink-600",
-    gray: "bg-slate-200 text-slate-600"
+    pink:   "bg-pink-100 text-pink-600",
+    gray:   "bg-slate-200 text-slate-600",
   };
-
   return (
-    <div className={`w-9 h-9 rounded-full ${bgColors[color] || bgColors.gray} flex items-center justify-center font-bold text-xs border-2 border-white shadow-sm`}>
+    <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs border-2 border-white shadow-sm ${palette[color] || palette.gray}`}>
       {initials}
     </div>
   );
@@ -28,7 +28,7 @@ const Avatar = ({ firstName, lastName, color }) => {
 
 const Badge = ({ children, color = "gray" }) => {
   const styles = {
-    gray: "bg-slate-100 text-slate-600 border-slate-200",
+    gray:   "bg-slate-100 text-slate-600 border-slate-200",
     indigo: "bg-indigo-50 text-indigo-700 border-indigo-100",
   };
   return (
@@ -41,7 +41,7 @@ const Badge = ({ children, color = "gray" }) => {
 const Modal = ({ isOpen, onClose, title, children }) => {
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden max-h-[90vh]">
         <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
           <h3 className="text-lg font-bold text-slate-800">{title}</h3>
@@ -55,209 +55,156 @@ const Modal = ({ isOpen, onClose, title, children }) => {
   );
 };
 
-/* --- PAGE PRINCIPALE --- */
+// ---------------------------------------------------------------------------
+// Page principale
+// ---------------------------------------------------------------------------
+
 const Students = () => {
-  // --- ÉTATS ---
-  const [students, setStudents] = useState([]);
+
+  // --- États données ---
+  const [students,      setStudents]      = useState([]);
   const [totalStudents, setTotalStudents] = useState(0);
+  const [classesList,   setClassesList]   = useState([]);
+  const [parentsList,   setParentsList]   = useState([]);
 
-  // Listes pour les <select> (chargées une seule fois)
-  const [classesList, setClassesList] = useState([]);
-  const [parentsList, setParentsList] = useState([]);
+  // --- États UI ---
+  const [loading,    setLoading]    = useState(true);
+  const [saving,     setSaving]     = useState(false);
+  const [showModal,  setShowModal]  = useState(false);
 
-  // UI States
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [showModal, setShowModal] = useState(false);
-
-  // Import modal
+  // --- Import ---
   const [showImportModal, setShowImportModal] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState(null);
-  const [importProgress, setImportProgress] = useState(0);
+  const [importing,       setImporting]       = useState(false);
+  const [importResult,    setImportResult]    = useState(null); // null | { total_rows, success_count, error_count, results } | { error }
+  const importFileRef = useRef(null);
 
-  // Filtres & Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const [search, setSearch] = useState("");
+  // --- Filtres & Pagination ---
+  const [currentPage,     setCurrentPage]     = useState(1);
+  const [pageSize]                            = useState(10);
+  const [search,          setSearch]          = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [filterClassId, setFilterClassId] = useState("");
+  const [filterClassId,   setFilterClassId]   = useState("");
 
-  // Formulaire
+  // --- Formulaire étudiant ---
   const [currentStudent, setCurrentStudent] = useState(null);
-  const [formData, setFormData] = useState({
-    username: "",
-    email: "",
-    firstName: "",
-    lastName: "",
-    sex: "M",
-    dateOfBirth: "",
-    schoolClassId: "",
-    parentId: "",
-    password: "",
+  const [studentForm,    setStudentForm]    = useState({
+    username: "", email: "", firstName: "", lastName: "",
+    sex: "M", dateOfBirth: "", schoolClassId: "", parentId: "", password: "",
   });
 
   const latestRequestId = useRef(0);
 
-  /* ----------------------------------------------------------------
-   * 1. INITIALISATION (Listes déroulantes)
-   * ---------------------------------------------------------------- */
+  // -------------------------------------------------------------------------
+  // 1. Chargement des listes déroulantes (une seule fois)
+  // -------------------------------------------------------------------------
   useEffect(() => {
-    const fetchDropdowns = async () => {
+    const load = async () => {
       try {
         const [clsData, parData] = await Promise.all([
           fetchData("/academics/school-classes/?page_size=100"),
-          fetchData("/core/admin/parents/?page_size=100")
+          fetchData("/core/admin/parents/?page_size=100"),
         ]);
-
-        setClassesList(clsData?.results || clsData || []);
-        setParentsList(parData?.results || parData || []);
+        setClassesList(clsData?.results ?? clsData ?? []);
+        setParentsList(parData?.results  ?? parData  ?? []);
       } catch (err) {
         console.error("Erreur chargement dropdowns:", err);
       }
     };
-    fetchDropdowns();
+    load();
   }, []);
 
-  /* ----------------------------------------------------------------
-   * 2. DEBOUNCE
-   * ---------------------------------------------------------------- */
+  // -------------------------------------------------------------------------
+  // 2. Debounce de la recherche
+  // -------------------------------------------------------------------------
   useEffect(() => {
-    const handler = setTimeout(() => setDebouncedSearch(search), 400);
-    return () => clearTimeout(handler);
+    const t = setTimeout(() => setDebouncedSearch(search), 400);
+    return () => clearTimeout(t);
   }, [search]);
 
-  /* ----------------------------------------------------------------
-   * 3. FETCH STUDENTS (robuste multi-shape)
-   * ---------------------------------------------------------------- */
-  const normalizeStudent = (s) => {
-    // Ensure necessary nested objects exist to avoid render crashes
-    const user = s.user || { username: "", first_name: "", last_name: "", email: "" };
-    const parent = s.parent || null;
-    const school_class = s.school_class || null;
-    return { ...s, user, parent, school_class };
-  };
+  // -------------------------------------------------------------------------
+  // 3. Chargement des élèves
+  // -------------------------------------------------------------------------
+  const normalizeStudent = (s) => ({
+    ...s,
+    user:         s.user         ?? { username: "", first_name: "", last_name: "", email: "" },
+    parent:       s.parent       ?? null,
+    school_class: s.school_class ?? null,
+  });
 
   const fetchStudents = async () => {
     setLoading(true);
     const reqId = ++latestRequestId.current;
-
     try {
-      const params = new URLSearchParams();
-      params.set("page", currentPage);
-      params.set("page_size", pageSize);
-      if (debouncedSearch) params.set("search", debouncedSearch);
-      if (filterClassId) params.set("school_class", filterClassId);
+      const params = new URLSearchParams({
+        page:      currentPage,
+        page_size: pageSize,
+        ...(debouncedSearch && { search: debouncedSearch }),
+        ...(filterClassId   && { school_class: filterClassId }),
+      });
+      const raw = await fetchData(`/core/admin/students/?${params}`);
+      if (reqId !== latestRequestId.current) return;
 
-      const raw = await fetchData(`/core/admin/students/?${params.toString()}`);
+      let list = [], count = 0;
+      if (Array.isArray(raw?.results)) { list = raw.results; count = raw.count ?? list.length; }
+      else if (Array.isArray(raw))     { list = raw;          count = raw.length; }
+      else if (Array.isArray(raw?.data)){ list = raw.data;   count = raw.total ?? list.length; }
 
-      // Debug log to help trace backend shape
-      console.debug("fetchStudents - raw response:", raw);
-
-      let studentsList = [];
-      let count = 0;
-
-      // Case A: DRF paginated response {count, next, previous, results: [...]}
-      if (raw && typeof raw === "object" && Array.isArray(raw.results)) {
-        studentsList = raw.results;
-        count = raw.count ?? studentsList.length;
-      }
-      // Case B: backend returned a plain list [...]
-      else if (Array.isArray(raw)) {
-        studentsList = raw;
-        count = raw.length;
-      }
-      // Case C: backend returned an object but not paginated (maybe {data: [...]})
-      else if (raw && typeof raw === "object" && Array.isArray(raw.data)) {
-        studentsList = raw.data;
-        count = raw.total ?? studentsList.length;
-      }
-      // Fallback: if raw contains keys 'results' but not array (defensive)
-      else if (raw && raw.results && !Array.isArray(raw.results)) {
-        console.warn("fetchStudents - unexpected results shape", raw.results);
-        studentsList = [];
-        count = raw.count ?? 0;
-      } else {
-        // Unknown shape — try to be forgiving
-        studentsList = raw ? (raw.results || raw.data || []) : [];
-        count = raw && raw.count ? raw.count : studentsList.length;
-      }
-
-      // Normalize elements to always include nested objects
-      const normalized = studentsList.map(normalizeStudent);
-
-      if (reqId === latestRequestId.current) {
-        setStudents(normalized);
-        setTotalStudents(count);
-      }
+      setStudents(list.map(normalizeStudent));
+      setTotalStudents(count);
     } catch (err) {
       console.error("fetchStudents error:", err);
-      if (reqId === latestRequestId.current) {
-        setStudents([]);
-        setTotalStudents(0);
-      }
+      if (reqId === latestRequestId.current) { setStudents([]); setTotalStudents(0); }
     } finally {
       if (reqId === latestRequestId.current) setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchStudents();
-    // eslint-disable-next-line
-  }, [currentPage, pageSize, debouncedSearch, filterClassId]);
+  useEffect(() => { fetchStudents(); }, [currentPage, pageSize, debouncedSearch, filterClassId]); // eslint-disable-line
 
-  /* ----------------------------------------------------------------
-   * 4. FORM HANDLERS
-   * ---------------------------------------------------------------- */
+  // -------------------------------------------------------------------------
+  // 4. Formulaire étudiant (add / edit)
+  // -------------------------------------------------------------------------
   const openModal = (student = null) => {
     setCurrentStudent(student);
-    if (student) {
-      setFormData({
-        username: student.user?.username || "",
-        email: student.user?.email || "",
-        firstName: student.user?.first_name || "",
-        lastName: student.user?.last_name || "",
-        sex: student.sex || "M",
-        dateOfBirth: student.date_of_birth || "",
-        schoolClassId: student.school_class?.id || "",
-        parentId: student.parent?.id || "",
-        password: "",
-      });
-    } else {
-      setFormData({
-        username: "", email: "", firstName: "", lastName: "",
-        sex: "M", dateOfBirth: "", schoolClassId: "", parentId: "", password: ""
-      });
-    }
+    setStudentForm(student ? {
+      username:     student.user?.username      ?? "",
+      email:        student.user?.email         ?? "",
+      firstName:    student.user?.first_name    ?? "",
+      lastName:     student.user?.last_name     ?? "",
+      sex:          student.sex                 ?? "M",
+      dateOfBirth:  student.date_of_birth       ?? "",
+      schoolClassId: student.school_class?.id   ?? "",
+      parentId:     student.parent?.id          ?? "",
+      password:     "",
+    } : {
+      username: "", email: "", firstName: "", lastName: "",
+      sex: "M", dateOfBirth: "", schoolClassId: "", parentId: "", password: "",
+    });
     setShowModal(true);
   };
 
   const handleSubmit = async () => {
-    if (!formData.firstName || !formData.lastName) return alert("Nom et Prénom obligatoires");
-
+    if (!studentForm.firstName || !studentForm.lastName) return alert("Prénom et Nom sont obligatoires.");
     setSaving(true);
     try {
       const payload = {
         user: {
-          first_name: formData.firstName,
-          last_name: formData.lastName,
-          email: formData.email,
+          first_name: studentForm.firstName,
+          last_name:  studentForm.lastName,
+          email:      studentForm.email,
+          ...(studentForm.password && { password: studentForm.password }),
+          ...(!currentStudent && studentForm.username && { username: studentForm.username }),
         },
-        sex: formData.sex,
-        date_of_birth: formData.dateOfBirth || null,
-        school_class_id: formData.schoolClassId ? parseInt(formData.schoolClassId) : null,
-        parent_id: formData.parentId ? parseInt(formData.parentId) : null,
+        sex:            studentForm.sex,
+        date_of_birth:  studentForm.dateOfBirth || null,
+        school_class_id: studentForm.schoolClassId ? parseInt(studentForm.schoolClassId) : null,
+        parent_id:       studentForm.parentId      ? parseInt(studentForm.parentId)      : null,
       };
-
-      if (formData.password) payload.user.password = formData.password;
-      if (!currentStudent && formData.username) payload.user.username = formData.username;
-
       if (currentStudent) {
         await patchData(`/core/admin/students/${currentStudent.id}/`, payload);
       } else {
         await postData("/core/admin/students/", payload);
       }
-
       setShowModal(false);
       fetchStudents();
     } catch (err) {
@@ -269,83 +216,92 @@ const Students = () => {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Supprimer cet étudiant ?")) return;
+    if (!window.confirm("Supprimer cet étudiant définitivement ?")) return;
     try {
       await deleteData(`/core/admin/students/${id}/`);
       fetchStudents();
     } catch (err) {
       console.error(err);
-      alert("Erreur lors de la suppression");
+      alert("Erreur lors de la suppression.");
     }
   };
 
-  /* ----------------------------------------------------------------
-   * 5. IMPORT (UI + upload logic)
-   * ---------------------------------------------------------------- */
-  const handleFileSelect = async (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    uploadFile(file, e);
+  // -------------------------------------------------------------------------
+  // 5. Import CSV / XLSX
+  //
+  // Corrections apportées :
+  //   - URL absolue construite avec API_BASE (évite le 404 dû au port Vite)
+  //   - UN SEUL point d'entrée : bouton "Importer" → ouvre le modal
+  //     Le fichier est sélectionné UNIQUEMENT depuis l'input dans le modal
+  //   - Variable locale renommée "fd" (FormData) pour ne pas shadow le state
+  //   - showImportModal correctement piloté
+  //   - Affichage des champs success_count / error_count du nouveau backend
+  //   - Reset propre de l'input file après upload
+  // -------------------------------------------------------------------------
+  const openImportModal = () => {
+    setImportResult(null);
+    setImporting(false);
+    setShowImportModal(true);
   };
 
-  const uploadFile = async (file, event) => {
+  const closeImportModal = () => {
+    if (importing) return; // empêche la fermeture pendant l'upload
+    setShowImportModal(false);
+    setImportResult(null);
+    if (importFileRef.current) importFileRef.current.value = "";
+  };
+
+  const handleImportFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    uploadImportFile(file);
+  };
+
+  const uploadImportFile = async (file) => {
     setImporting(true);
-    setImportProgress(0);
     setImportResult(null);
 
-    const formData = new FormData();
-    formData.append("file", file);
+    // "fd" pour ne pas shadow le state React "studentForm"
+    const fd = new FormData();
+    fd.append("file", file);
 
     try {
-      const token = localStorage.getItem("access_token");
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      // postFormData de api.js gère buildUrl (local + Railway), auth JWT,
+      // et ne pose pas de Content-Type → le navigateur fixe la boundary seul
+      const data = await postFormData("/core/admin/students/import-csv/", fd);
 
-      const response = await fetch("/api/core/admin/students/import-csv/", {
-        method: "POST",
-        headers,
-        body: formData,
-      });
+      // Réponse attendue : { total_rows, success_count, error_count, results: [...] }
+      setImportResult(data ?? { total_rows: 0, success_count: 0, error_count: 0, results: [] });
 
-      const text = await response.text();
-      let data = null;
-      try {
-        data = text ? JSON.parse(text) : null;
-      } catch (e) {
-        console.warn("Import response not JSON:", text);
-      }
+      if ((data?.success_count ?? 0) > 0) fetchStudents();
 
-      if (!response.ok) {
-        const errMsg = (data && (data.detail || data.message)) || text || `Erreur serveur (${response.status})`;
-        throw new Error(errMsg);
-      }
-
-      setImportProgress(100);
-      setImportResult(data || { total_rows: 0, results: [] });
-
-      // refresh listing after successful import
-      fetchStudents();
-    } catch (error) {
-      console.error("Import error:", error);
-      setImportResult({ error: error.message || "Erreur lors de l'import." });
-      setImportProgress(0);
+    } catch (err) {
+      console.error("Import error:", err);
+      // err.body peut contenir le detail Django si la réponse était du JSON
+      const msg = err.body?.detail ?? err.body?.message ?? err.message ?? "Erreur inconnue lors de l'import.";
+      setImportResult({ error: msg });
     } finally {
       setImporting(false);
-      if (event?.target) event.target.value = "";
+      if (importFileRef.current) importFileRef.current.value = "";
     }
   };
 
-  /* ----------------------------------------------------------------
-   * 6. RENDU
-   * ---------------------------------------------------------------- */
-  const totalPages = Math.ceil((totalStudents || 0) / (pageSize || 1));
+  // -------------------------------------------------------------------------
+  // 6. Rendu
+  // -------------------------------------------------------------------------
+  const totalPages = Math.ceil((totalStudents || 0) / pageSize);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-20 font-sans">
 
-      {/* HEADER & FILTRES */}
+      {/* ------------------------------------------------------------------ */}
+      {/* HEADER                                                              */}
+      {/* ------------------------------------------------------------------ */}
       <div className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+
+            {/* Titre */}
             <div className="flex items-center gap-3">
               <div className="bg-indigo-100 p-2 rounded-lg text-indigo-600">
                 <FaUserGraduate size={20} />
@@ -358,22 +314,35 @@ const Students = () => {
               </div>
             </div>
 
+            {/* Actions */}
             <div className="flex gap-2">
-              <button onClick={fetchStudents} className="p-2 text-slate-400 hover:text-indigo-600 rounded-full hover:bg-indigo-50 transition">
+              <button
+                onClick={fetchStudents}
+                className="p-2 text-slate-400 hover:text-indigo-600 rounded-full hover:bg-indigo-50 transition"
+                title="Rafraîchir"
+              >
                 <FaSyncAlt className={loading ? "animate-spin" : ""} />
               </button>
 
-              <label className="inline-flex items-center gap-2 px-3 py-2 border rounded bg-white hover:bg-slate-50 cursor-pointer text-sm">
-                <FaUpload /> <span className="text-xs">Importer</span>
-                <input type="file" accept=".csv,.xlsx,.xls,.txt" onChange={handleFileSelect} className="hidden" />
-              </label>
+              {/* Bouton Import — ouvre le modal, pas d'input file ici */}
+              <button
+                onClick={openImportModal}
+                className="inline-flex items-center gap-2 px-3 py-2 border border-slate-200 rounded-lg bg-white hover:bg-slate-50 text-sm font-medium text-slate-600 transition"
+              >
+                <FaUpload size={12} />
+                <span className="text-xs">Importer</span>
+              </button>
 
-              <button onClick={() => openModal()} className="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow hover:bg-indigo-700 flex items-center gap-2 text-sm font-bold transition">
+              <button
+                onClick={() => openModal()}
+                className="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow hover:bg-indigo-700 flex items-center gap-2 text-sm font-bold transition"
+              >
                 <FaPlus /> Nouveau
               </button>
             </div>
           </div>
 
+          {/* Filtres */}
           <div className="mt-4 flex flex-col md:flex-row gap-3">
             <div className="relative flex-1">
               <FaSearch className="absolute left-3 top-3 text-slate-400" />
@@ -399,7 +368,9 @@ const Students = () => {
         </div>
       </div>
 
-      {/* TABLEAU */}
+      {/* ------------------------------------------------------------------ */}
+      {/* TABLEAU                                                             */}
+      {/* ------------------------------------------------------------------ */}
       <main className="max-w-7xl mx-auto px-4 py-6">
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           {loading && students.length === 0 ? (
@@ -418,25 +389,19 @@ const Students = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {students.map((student) => {
-                    const user = student.user || {};
-                    const parent = student.parent;
+                    const user        = student.user        || {};
+                    const parent      = student.parent;
                     const schoolClass = student.school_class;
-
-                    const fullName = `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.username || "—";
-                    const className = schoolClass ? schoolClass.name : "Non inscrit";
-
-                    let parentName = "—";
-                    let parentPhone = null;
-                    if (parent && parent.user) {
-                      parentName = `${parent.user.first_name || ""} ${parent.user.last_name || ""}`.trim();
-                      parentPhone = parent.phone;
-                    }
+                    const fullName    = `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.username || "—";
+                    const parentName  = parent?.user
+                      ? `${parent.user.first_name || ""} ${parent.user.last_name || ""}`.trim()
+                      : null;
 
                     return (
                       <tr key={student.id} className="hover:bg-slate-50/50 group transition">
                         <td className="px-6 py-3">
                           <div className="flex items-center gap-3">
-                            <Avatar firstName={user.first_name} lastName={user.last_name} color={student.sex === 'F' ? 'pink' : 'indigo'} />
+                            <Avatar firstName={user.first_name} lastName={user.last_name} color={student.sex === "F" ? "pink" : "indigo"} />
                             <div>
                               <div className="font-bold text-slate-700">{fullName}</div>
                               <div className="text-xs text-slate-400 font-mono">ID: {student.id}</div>
@@ -444,23 +409,23 @@ const Students = () => {
                           </div>
                         </td>
                         <td className="px-6 py-3">
-                          {student.sex === 'F' ?
-                            <span className="text-pink-500 font-bold text-xs flex items-center gap-1"><FaVenus /> F</span> :
-                            <span className="text-indigo-500 font-bold text-xs flex items-center gap-1"><FaMars /> M</span>
+                          {student.sex === "F"
+                            ? <span className="text-pink-500 font-bold text-xs flex items-center gap-1"><FaVenus /> F</span>
+                            : <span className="text-indigo-500 font-bold text-xs flex items-center gap-1"><FaMars /> M</span>
                           }
                         </td>
                         <td className="px-6 py-3">
                           <Badge color={schoolClass ? "indigo" : "gray"}>
-                            {className}
+                            {schoolClass?.name ?? "Non inscrit"}
                           </Badge>
                         </td>
                         <td className="px-6 py-3 text-slate-600">
                           {parent ? (
                             <div className="flex flex-col">
                               <span className="font-medium text-xs">{parentName}</span>
-                              {parentPhone && (
+                              {parent.phone && (
                                 <span className="text-[10px] text-slate-400 flex items-center gap-1">
-                                  <FaPhone size={8} /> {parentPhone}
+                                  <FaPhone size={8} /> {parent.phone}
                                 </span>
                               )}
                             </div>
@@ -482,14 +447,16 @@ const Students = () => {
                     );
                   })}
                   {!loading && students.length === 0 && (
-                    <tr><td colSpan="5" className="px-6 py-10 text-center text-slate-400 italic">Aucun étudiant trouvé.</td></tr>
+                    <tr>
+                      <td colSpan="5" className="px-6 py-10 text-center text-slate-400 italic">Aucun étudiant trouvé.</td>
+                    </tr>
                   )}
                 </tbody>
               </table>
             </div>
           )}
 
-          {/* PAGINATION */}
+          {/* Pagination */}
           <div className="px-6 py-4 border-t border-slate-100 flex justify-between items-center bg-slate-50/30">
             <span className="text-xs text-slate-500">Page {currentPage} sur {totalPages || 1}</span>
             <div className="flex gap-2">
@@ -504,67 +471,97 @@ const Students = () => {
         </div>
       </main>
 
-      {/* MODAL AJOUT / ÉDITION */}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={currentStudent ? "Modifier l'étudiant" : "Nouvel étudiant"}>
+      {/* ------------------------------------------------------------------ */}
+      {/* MODAL — Ajout / Édition étudiant                                   */}
+      {/* ------------------------------------------------------------------ */}
+      <Modal
+        isOpen={showModal}
+        onClose={() => setShowModal(false)}
+        title={currentStudent ? "Modifier l'étudiant" : "Nouvel étudiant"}
+      >
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">Prénom</label>
-              <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
-                value={formData.firstName} onChange={e => setFormData({ ...formData, firstName: e.target.value })} />
+              <input
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
+                value={studentForm.firstName}
+                onChange={e => setStudentForm(f => ({ ...f, firstName: e.target.value }))}
+              />
             </div>
             <div>
               <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">Nom</label>
-              <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
-                value={formData.lastName} onChange={e => setFormData({ ...formData, lastName: e.target.value })} />
+              <input
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
+                value={studentForm.lastName}
+                onChange={e => setStudentForm(f => ({ ...f, lastName: e.target.value }))}
+              />
             </div>
           </div>
 
           <div>
             <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">Email</label>
-            <input type="email" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
-              value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} />
+            <input
+              type="email"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
+              value={studentForm.email}
+              onChange={e => setStudentForm(f => ({ ...f, email: e.target.value }))}
+            />
           </div>
 
           {!currentStudent && (
             <div>
               <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">Nom d'utilisateur (Login)</label>
-              <input className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
-                value={formData.username} onChange={e => setFormData({ ...formData, username: e.target.value })} />
+              <input
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
+                value={studentForm.username}
+                onChange={e => setStudentForm(f => ({ ...f, username: e.target.value }))}
+              />
             </div>
           )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">Sexe</label>
-              <select className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
-                value={formData.sex} onChange={e => setFormData({ ...formData, sex: e.target.value })}>
+              <select
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
+                value={studentForm.sex}
+                onChange={e => setStudentForm(f => ({ ...f, sex: e.target.value }))}
+              >
                 <option value="M">Masculin</option>
                 <option value="F">Féminin</option>
               </select>
             </div>
             <div>
-              <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">Date Naissance</label>
-              <input type="date" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
-                value={formData.dateOfBirth} onChange={e => setFormData({ ...formData, dateOfBirth: e.target.value })} />
+              <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">Date de naissance</label>
+              <input
+                type="date"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
+                value={studentForm.dateOfBirth}
+                onChange={e => setStudentForm(f => ({ ...f, dateOfBirth: e.target.value }))}
+              />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
             <div>
               <label className="block text-[11px] font-bold text-indigo-400 uppercase mb-1">Classe</label>
-              <select className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
-                value={formData.schoolClassId} onChange={e => setFormData({ ...formData, schoolClassId: e.target.value })}>
+              <select
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
+                value={studentForm.schoolClassId}
+                onChange={e => setStudentForm(f => ({ ...f, schoolClassId: e.target.value }))}
+              >
                 <option value="">-- Non attribuée --</option>
-                {classesList.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
+                {classesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
             <div>
               <label className="block text-[11px] font-bold text-indigo-400 uppercase mb-1">Parent</label>
-              <select className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
-                value={formData.parentId} onChange={e => setFormData({ ...formData, parentId: e.target.value })}>
+              <select
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
+                value={studentForm.parentId}
+                onChange={e => setStudentForm(f => ({ ...f, parentId: e.target.value }))}
+              >
                 <option value="">-- Aucun --</option>
                 {parentsList.map(p => (
                   <option key={p.id} value={p.id}>
@@ -576,56 +573,156 @@ const Students = () => {
           </div>
 
           <div>
-            <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">Mot de passe {currentStudent && "(Optionnel)"}</label>
-            <input type="password" placeholder="••••••••" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
-              value={formData.password} onChange={e => setFormData({ ...formData, password: e.target.value })} />
+            <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+              Mot de passe {currentStudent ? "(laisser vide pour ne pas changer)" : ""}
+            </label>
+            <input
+              type="password"
+              placeholder="••••••••"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition"
+              value={studentForm.password}
+              onChange={e => setStudentForm(f => ({ ...f, password: e.target.value }))}
+            />
           </div>
 
-          <div className="flex justify-end gap-3 pt-4 border-t border-slate-50 mt-2">
-            <button onClick={() => setShowModal(false)} className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg text-sm font-bold hover:bg-slate-50 transition">
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+            <button
+              onClick={() => setShowModal(false)}
+              className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg text-sm font-bold hover:bg-slate-50 transition"
+            >
               Annuler
             </button>
-            <button onClick={handleSubmit} disabled={saving} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 transition shadow-sm disabled:opacity-50">
+            <button
+              onClick={handleSubmit}
+              disabled={saving}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 transition shadow-sm disabled:opacity-50"
+            >
               {saving ? "Enregistrement..." : "Enregistrer"}
             </button>
           </div>
         </div>
       </Modal>
 
-      {/* IMPORT RESULT MODAL */}
-      <Modal isOpen={importing || showImportModal || !!importResult} onClose={() => { setShowImportModal(false); setImportResult(null); }}>
-        <div className="space-y-4">
-          <h3 className="text-lg font-bold">Import CSV / XLSX</h3>
+      {/* ------------------------------------------------------------------ */}
+      {/* MODAL — Import CSV / XLSX                                          */}
+      {/* ------------------------------------------------------------------ */}
+      <Modal
+        isOpen={showImportModal}
+        onClose={closeImportModal}
+        title="Import CSV / XLSX"
+      >
+        <div className="space-y-5">
 
-          <div className="text-sm text-slate-600">
-            <p>Sélectionnez un fichier .csv ou .xlsx (max côté client). Colonnes acceptées : <code>first_name,last_name,email,date_of_birth,sex,school_class,school_class_id,parent_id,username,password</code></p>
+          {/* Instructions */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-500 space-y-1">
+            <p className="font-bold text-slate-600 mb-2">Colonnes acceptées</p>
+            <p><span className="font-semibold text-red-500">Obligatoires :</span> <code>first_name</code>, <code>last_name</code></p>
+            <p>
+              <span className="font-semibold text-slate-500">Facultatifs :</span>{" "}
+              <code>email</code>, <code>date_of_birth</code>, <code>sex</code> (M/F),{" "}
+              <code>school_class</code> (ID), <code>parent_id</code>, <code>username</code>, <code>password</code>
+            </p>
+            <p className="pt-1 text-slate-400">Formats acceptés : .csv, .txt, .xlsx, .xls — max 1 000 lignes</p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <input type="file" accept=".csv,.xlsx,.xls,.txt" onChange={handleFileSelect} />
-            {importing ? <div className="text-sm text-slate-500">Import en cours... {importProgress}%</div> : null}
-          </div>
+          {/* Zone de sélection de fichier */}
+          {!importing && !importResult && (
+            <label className="flex flex-col items-center justify-center gap-3 border-2 border-dashed border-indigo-200 rounded-xl p-8 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/40 transition">
+              <FaUpload className="text-indigo-400 text-2xl" />
+              <span className="text-sm font-medium text-slate-600">Cliquez pour choisir un fichier</span>
+              <span className="text-xs text-slate-400">.csv, .xlsx, .xls, .txt</span>
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".csv,.xlsx,.xls,.txt"
+                onChange={handleImportFileChange}
+                className="hidden"
+              />
+            </label>
+          )}
 
-          {importResult && (
-            <div className="mt-4 text-sm">
+          {/* État : import en cours */}
+          {importing && (
+            <div className="flex flex-col items-center gap-3 py-6 text-slate-500">
+              <FaSyncAlt className="animate-spin text-indigo-500 text-2xl" />
+              <p className="text-sm font-medium">Import en cours, veuillez patienter...</p>
+            </div>
+          )}
+
+          {/* Résultats */}
+          {importResult && !importing && (
+            <div className="space-y-4">
+
+              {/* Erreur globale (réseau, format, etc.) */}
               {importResult.error ? (
-                <div className="text-red-600">Erreur: {importResult.error}</div>
+                <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+                  <FaTimesCircle className="mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-bold">Erreur d'import</p>
+                    <p className="text-xs mt-1">{importResult.error}</p>
+                  </div>
+                </div>
               ) : (
                 <>
-                  <div>Total lignes: {importResult.total_rows ?? "?"}</div>
-                  <div className="max-h-48 overflow-y-auto mt-2">
-                    {Array.isArray(importResult.results) ? (
-                      importResult.results.slice(0, 200).map((r, i) => (
-                        <div key={i} className={`text-xs py-1 ${r.success ? "text-green-700" : "text-red-700"}`}>
-                          Ligne {r.row} • {r.username || ""} • {r.success ? "ok" : (typeof r.error === "string" ? r.error : JSON.stringify(r.error))}
-                        </div>
-                      ))
-                    ) : (
-                      <pre className="text-xs">{JSON.stringify(importResult, null, 2)}</pre>
-                    )}
+                  {/* Résumé succès / erreurs */}
+                  <div className="grid grid-cols-3 gap-3 text-center">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl py-3">
+                      <p className="text-lg font-bold text-slate-700">{importResult.total_rows ?? "—"}</p>
+                      <p className="text-[10px] text-slate-400 uppercase font-bold">Total</p>
+                    </div>
+                    <div className="bg-green-50 border border-green-200 rounded-xl py-3">
+                      <p className="text-lg font-bold text-green-700">{importResult.success_count ?? "—"}</p>
+                      <p className="text-[10px] text-green-500 uppercase font-bold">Importés</p>
+                    </div>
+                    <div className="bg-red-50 border border-red-200 rounded-xl py-3">
+                      <p className="text-lg font-bold text-red-700">{importResult.error_count ?? "—"}</p>
+                      <p className="text-[10px] text-red-400 uppercase font-bold">Erreurs</p>
+                    </div>
                   </div>
+
+                  {/* Détail ligne par ligne */}
+                  {Array.isArray(importResult.results) && importResult.results.length > 0 && (
+                    <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-100 divide-y divide-slate-50 custom-scrollbar">
+                      {importResult.results.map((r, i) => (
+                        <div
+                          key={i}
+                          className={`flex items-start gap-2 px-3 py-2 text-xs ${r.success ? "bg-white text-slate-600" : "bg-red-50 text-red-700"}`}
+                        >
+                          {r.success
+                            ? <FaCheckCircle className="text-green-500 mt-0.5 flex-shrink-0" />
+                            : <FaTimesCircle className="text-red-500 mt-0.5 flex-shrink-0" />
+                          }
+                          <div className="min-w-0">
+                            <span className="font-bold">Ligne {r.row}</span>
+                            {r.username && <span className="text-slate-400"> · {r.username}</span>}
+                            {!r.success && (
+                              <p className="text-red-600 mt-0.5 break-words">
+                                {typeof r.error === "string" ? r.error : JSON.stringify(r.error)}
+                              </p>
+                            )}
+                            {r.warnings?.map((w, wi) => (
+                              <p key={wi} className="text-amber-600 flex items-center gap-1 mt-0.5">
+                                <FaExclamationTriangle size={9} /> {w}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </>
               )}
+
+              {/* Bouton pour relancer un autre import */}
+              <button
+                onClick={() => {
+                  setImportResult(null);
+                  if (importFileRef.current) importFileRef.current.value = "";
+                }}
+                className="w-full py-2 border border-slate-200 rounded-xl text-sm text-slate-500 hover:bg-slate-50 transition"
+              >
+                Importer un autre fichier
+              </button>
             </div>
           )}
         </div>

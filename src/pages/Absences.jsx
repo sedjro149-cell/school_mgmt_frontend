@@ -1,680 +1,699 @@
-import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  FaCalendarAlt,
-  FaUsers,
-  FaUserCheck,
-  FaUserTimes,
-  FaUndo,
-  FaSpinner,
-  FaChevronLeft,
-  FaChevronRight,
-  FaChevronDown,
-  FaEllipsisV,
-  FaClock,
-  FaBook,
-  FaCheck,
-  FaTimes
+  FaCalendarAlt, FaChevronLeft, FaChevronRight, FaCheck,
+  FaTimes, FaUndo, FaSpinner, FaUserCheck, FaUserTimes,
+  FaLockOpen, FaLock, FaBan, FaChevronDown, FaChevronUp,
+  FaBell, FaRedo,
 } from "react-icons/fa";
-import { fetchData, postData, putData, deleteData } from "./api";
+import { fetchData, postData, patchData, deleteData } from "./api";
 
-/**
- * AttendanceSheet
- * - GET /attendance/sheet/?class_id=X&date=YYYY-MM-DD
- * - POST /attendances/  { student, schedule_entry, date, status }
- * - DELETE /attendances/{id}/
- * - PUT  /attendances/{id}/  to change status (we call putData with full payload)
- *
- * Conventions : utilise les mêmes toasts / styles que ta page LevelsAndClasses
- */
+// ─── constants ───────────────────────────────────────────────────────────────
+
+const STATUS_META = {
+  PRESENT: { label: "Présent",  bg: "bg-emerald-50",  text: "text-emerald-700", border: "border-emerald-100", dot: "bg-emerald-400" },
+  ABSENT:  { label: "Absent",   bg: "bg-red-50",      text: "text-red-700",     border: "border-red-100",     dot: "bg-red-400"     },
+  LATE:    { label: "Retard",   bg: "bg-amber-50",    text: "text-amber-700",   border: "border-amber-100",   dot: "bg-amber-400"   },
+  EXCUSED: { label: "Excusé",   bg: "bg-sky-50",      text: "text-sky-700",     border: "border-sky-100",     dot: "bg-sky-400"     },
+};
+
+const SESSION_STATUS_META = {
+  OPEN:      { label: "En cours",    bg: "bg-indigo-50", text: "text-indigo-700", icon: <FaLockOpen size={10} /> },
+  SUBMITTED: { label: "Validé",      bg: "bg-emerald-50", text: "text-emerald-700", icon: <FaLock size={10} /> },
+  CANCELLED: { label: "Annulé",      bg: "bg-slate-100",  text: "text-slate-500",   icon: <FaBan size={10} /> },
+};
+
+const NON_PRESENT = ["ABSENT", "LATE", "EXCUSED"];
+const weekdays    = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+
+// ─── AttendanceSheet ─────────────────────────────────────────────────────────
+
 export default function AttendanceSheet() {
-  /* --- global UI state --- */
-  const [classes, setClasses] = useState([]);
+  const [classes,        setClasses]        = useState([]);
   const [classesLoading, setClassesLoading] = useState(true);
-  const [selectedClass, setSelectedClass] = useState("");
-  const [date, setDate] = useState(localDateISO(new Date())); // YYYY-MM-DD local
-  const [message, setMessage] = useState(null);
+  const [selectedClass,  setSelectedClass]  = useState("");
+  const [date,           setDate]           = useState(localDateISO(new Date()));
+  const [slots,          setSlots]          = useState([]);   // [{ entry, session, students }]
+  const [loadingSheet,   setLoadingSheet]   = useState(false);
+  const [toast,          setToast]          = useState(null); // { type, text }
+  const [undoStack,      setUndoStack]      = useState([]);
+  const [pendingCells,   setPendingCells]   = useState({});  // key: `${sessionId}_${studentId}`
+  const [pendingSession, setPendingSession] = useState({}); // sessionId: bool
+  const [expandedSlots,  setExpandedSlots]  = useState({}); // slotIndex: bool
+  const toastTimer = useRef(null);
 
-  /* --- sheet data --- */
-  const [schedule, setSchedule] = useState([]); // array of schedule entries (columns)
-  const [students, setStudents] = useState([]); // array of students (rows)
-  const [attendanceMap, setAttendanceMap] = useState({}); 
-  // attendanceMap[studentId]?.[scheduleId] = { id, status }  OR undefined
+  // ── toast helper ─────────────────────────────────────────────────────────
+  const showToast = useCallback((type, text) => {
+    setToast({ type, text });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 4000);
+  }, []);
 
-  /* --- UI helpers --- */
-  const [loadingSheet, setLoadingSheet] = useState(false);
-  const [cellPending, setCellPending] = useState({}); // key = `${s}_${e}` => bool
-  const [undoStack, setUndoStack] = useState([]); // keep last actions to undo
-  const [bulkSaving, setBulkSaving] = useState(false);
-
-  /* focus for keyboard navigation */
-  const [focusCell, setFocusCell] = useState({ studentIndex: 0, scheduleIndex: 0 });
-  const containerRef = useRef(null);
-
-  /* --- Auto-dismiss toast --- */
+  // ── load classes ─────────────────────────────────────────────────────────
   useEffect(() => {
-    if (message) {
-      const t = setTimeout(() => setMessage(null), 4500);
-      return () => clearTimeout(t);
-    }
-  }, [message]);
+    const load = async () => {
+      setClassesLoading(true);
+      try {
+        const data = await fetchData("/academics/school-classes/");
+        const arr  = Array.isArray(data) ? data : data?.results ?? [];
+        setClasses(arr);
+        if (arr.length > 0) setSelectedClass(arr[0].id);
+      } catch {
+        showToast("error", "Impossible de charger les classes.");
+      } finally {
+        setClassesLoading(false);
+      }
+    };
+    load();
+  }, [showToast]);
 
-  /* --- Load classes for selector (reuse pattern from your page) --- */
-  const fetchClasses = useCallback(async () => {
-    setClassesLoading(true);
-    try {
-      const data = await fetchData("/academics/school-classes/");
-      const arr = Array.isArray(data) ? data : data?.results ?? [];
-      setClasses(arr);
-      if (!selectedClass && arr.length > 0) setSelectedClass(arr[0].id);
-    } catch (err) {
-      console.error(err);
-      setMessage({ type: "error", text: "Impossible de charger les classes." });
-    } finally {
-      setClassesLoading(false);
-    }
-  }, [selectedClass]);
-
-  useEffect(() => { fetchClasses(); }, [fetchClasses]);
-
-  /* --- Load sheet for selected class & date --- */
+  // ── fetch daily sheet ─────────────────────────────────────────────────────
   const fetchSheet = useCallback(async (classId, isoDate) => {
     if (!classId) return;
     setLoadingSheet(true);
     try {
-      const q = `/academics/attendance/sheet/?class_id=${encodeURIComponent(classId)}&date=${encodeURIComponent(isoDate)}`;
-      const res = await fetchData(q);
-      // expected { date, weekday, schedule: [], students: [], absences: [] }
-      setSchedule(Array.isArray(res.schedule) ? res.schedule : []);
-      setStudents(Array.isArray(res.students) ? res.students : []);
-      // build attendanceMap
-      const map = {};
-      (res.absences ?? []).forEach(a => {
-        if (!map[a.student_id]) map[a.student_id] = {};
-        map[a.student_id][a.schedule_entry_id] = { id: a.id, status: a.status || "ABSENT" };
-      });
-      setAttendanceMap(map);
-    } catch (err) {
-      console.error(err);
-      setMessage({ type: "error", text: "Impossible de charger la feuille de présence." });
-      setSchedule([]);
-      setStudents([]);
-      setAttendanceMap({});
+      const res = await fetchData(
+        `/academics/attendance/daily-sheet/?class_id=${encodeURIComponent(classId)}&date=${encodeURIComponent(isoDate)}`
+      );
+      const rawSlots = Array.isArray(res.slots) ? res.slots : [];
+      setSlots(rawSlots);
+      // expand first OPEN slot by default
+      const firstOpen = rawSlots.findIndex(s => s.session?.status === "OPEN");
+      setExpandedSlots({ [firstOpen >= 0 ? firstOpen : 0]: true });
+    } catch {
+      showToast("error", "Impossible de charger la feuille de présence.");
+      setSlots([]);
     } finally {
       setLoadingSheet(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     if (selectedClass) fetchSheet(selectedClass, date);
   }, [selectedClass, date, fetchSheet]);
 
-  /* --- helpers --- */
-  function cellKey(studentId, scheduleId) { return `${studentId}_${scheduleId}`; }
-  function isCellAbsent(studentId, scheduleId) {
-    return !!(attendanceMap[studentId] && attendanceMap[studentId][scheduleId]);
-  }
+  // ── cell pending helpers ──────────────────────────────────────────────────
+  const cellKey  = (sessionId, studentId) => `${sessionId}_${studentId}`;
+  const isBusy   = (sessionId, studentId) => !!pendingCells[cellKey(sessionId, studentId)];
+  const setBusy  = (sessionId, studentId, val) =>
+    setPendingCells(p => ({ ...p, [cellKey(sessionId, studentId)]: val }));
 
-  function setCellBusy(studentId, scheduleId, busy = true) {
-    setCellPending(prev => ({ ...prev, [cellKey(studentId, scheduleId)]: busy }));
-  }
+  // ── update slots state immutably ──────────────────────────────────────────
+  const updateStudentInSlot = (slotIdx, studentId, updater) => {
+    setSlots(prev => prev.map((slot, i) => {
+      if (i !== slotIdx) return slot;
+      return {
+        ...slot,
+        students: slot.students.map(s =>
+          s.id === studentId ? updater(s) : s
+        ),
+      };
+    }));
+  };
 
-  /* build payload for create/update */
-  function buildAttendancePayload(studentId, scheduleEntryId, isoDate, status="ABSENT") {
-    return { student: studentId, schedule_entry: scheduleEntryId, date: isoDate, status };
-  }
+  const updateSessionInSlot = (slotIdx, updater) => {
+    setSlots(prev => prev.map((slot, i) =>
+      i !== slotIdx ? slot : { ...slot, session: updater(slot.session) }
+    ));
+  };
 
-  /* --- Toggle single cell (optimistic) --- */
-  const toggleCell = async (studentId, scheduleId) => {
-    const existing = attendanceMap[studentId]?.[scheduleId];
-    const k = cellKey(studentId, scheduleId);
-    if (cellPending[k]) return; // prevent double click
-    setCellBusy(studentId, scheduleId, true);
+  // ── toggle absent / present ───────────────────────────────────────────────
+  const toggleAbsence = async (slotIdx, student) => {
+    const slot      = slots[slotIdx];
+    const session   = slot.session;
+    const sessionId = session.id;
 
-    if (!existing) {
-      // create absence
-      // optimistic update: set temporary placeholder id = "temp-<ts>" to disable double toggles
-      const tempId = `temp-${Date.now()}`;
-      setAttendanceMap(prev => {
-        const copy = { ...prev };
-        copy[studentId] = { ...(copy[studentId] || {}) };
-        copy[studentId][scheduleId] = { id: tempId, status: "ABSENT" };
-        return copy;
-      });
-      // push undo action
-      pushUndo({ type: "create", studentId, scheduleId, tempId });
+    if (!session.is_editable) return showToast("info", "Session soumise. Demandez une réouverture.");
+    if (isBusy(sessionId, student.id)) return;
 
+    setBusy(sessionId, student.id, true);
+
+    if (student.status === "PRESENT") {
+      // mark absent: POST new absence
+      const prev = { ...student };
+      updateStudentInSlot(slotIdx, student.id, s => ({ ...s, status: "ABSENT", absence_id: "temp" }));
       try {
-        const payload = buildAttendancePayload(studentId, scheduleId, date, "ABSENT");
-        const created = await postData("/academics/attendances/", payload);
-        // update tempId -> real id
-        setAttendanceMap(prev => {
-          const copy = { ...prev };
-          copy[studentId] = { ...(copy[studentId] || {}) };
-          if (copy[studentId][scheduleId] && copy[studentId][scheduleId].id === tempId) {
-            copy[studentId][scheduleId] = { id: created.id, status: created.status || "ABSENT" };
-          }
-          return copy;
+        const res = await postData("/academics/attendance/absences/", {
+          session: sessionId,
+          student: student.id,
+          status:  "ABSENT",
         });
-        setMessage({ type: "success", text: "Absent enregistré." });
-      } catch (err) {
-        console.error(err);
-        // revert optimistic
-        setAttendanceMap(prev => {
-          const copy = { ...prev };
-          if (copy[studentId]) {
-            const row = { ...(copy[studentId]) };
-            delete row[scheduleId];
-            copy[studentId] = Object.keys(row).length ? row : undefined;
-          }
-          return copy;
-        });
-        setMessage({ type: "error", text: "Échec enregistrement. Réessaye." });
-        // pop undo (remove last) because create didn't happen
-        popUndo();
-      } finally {
-        setCellBusy(studentId, scheduleId, false);
+        updateStudentInSlot(slotIdx, student.id, s => ({ ...s, absence_id: res.id, status: res.status }));
+        pushUndo({ type: "marked_absent", slotIdx, studentId: student.id, absenceId: res.id, prev });
+        showToast("success", `${student.name} — Absent.`);
+      } catch {
+        updateStudentInSlot(slotIdx, student.id, () => prev);
+        showToast("error", "Échec enregistrement.");
       }
     } else {
-      // delete absence (mark present)
-      // optimistic remove but keep data in undo stack
-      setAttendanceMap(prev => {
-        const copy = { ...prev };
-        if (copy[studentId]) {
-          const row = { ...(copy[studentId]) };
-          delete row[scheduleId];
-          copy[studentId] = Object.keys(row).length ? row : undefined;
-        }
-        return copy;
-      });
-      pushUndo({ type: "delete", studentId, scheduleId, record: existing });
+      // restore present: DELETE absence
+      const prev = { ...student };
+      updateStudentInSlot(slotIdx, student.id, s => ({ ...s, status: "PRESENT", absence_id: null }));
       try {
-        // if id is temporary (shouldn't happen for delete), handle
-        if (String(existing.id).startsWith("temp-")) {
-          // nothing to call on server
-          setMessage({ type: "success", text: "Annulé localement." });
-        } else {
-          await deleteData(`/academics/attendances/${existing.id}/`);
-          setMessage({ type: "success", text: "Présence restaurée." });
-        }
-      } catch (err) {
-        console.error(err);
-        // revert: put back existing
-        setAttendanceMap(prev => {
-          const copy = { ...prev };
-          copy[studentId] = { ...(copy[studentId] || {}) };
-          copy[studentId][scheduleId] = existing;
-          return copy;
-        });
-        setMessage({ type: "error", text: "Échec suppression. Réessaye." });
-        popUndo();
-      } finally {
-        setCellBusy(studentId, scheduleId, false);
+        await deleteData(`/academics/attendance/absences/${student.absence_id}/`);
+        pushUndo({ type: "restored_present", slotIdx, studentId: student.id, prev });
+        showToast("success", `${student.name} — Présent.`);
+      } catch {
+        updateStudentInSlot(slotIdx, student.id, () => prev);
+        showToast("error", "Échec suppression.");
       }
+    }
+    setBusy(sessionId, student.id, false);
+  };
+
+  // ── change status (ABSENT → LATE | EXCUSED) ───────────────────────────────
+  const changeStatus = async (slotIdx, student, newStatus) => {
+    const slot      = slots[slotIdx];
+    const session   = slot.session;
+    if (!session.is_editable) return showToast("info", "Session soumise.");
+    if (!student.absence_id || String(student.absence_id) === "temp") return;
+
+    const prev = { ...student };
+    updateStudentInSlot(slotIdx, student.id, s => ({ ...s, status: newStatus }));
+    try {
+      await patchData(`/academics/attendance/absences/${student.absence_id}/`, { status: newStatus });
+      pushUndo({ type: "status_changed", slotIdx, studentId: student.id, prev });
+    } catch {
+      updateStudentInSlot(slotIdx, student.id, () => prev);
+      showToast("error", "Impossible de modifier le statut.");
     }
   };
 
-  /* --- change status (ABSENT | LATE | EXCUSED) for an existing record --- */
-  const changeStatus = async (studentId, scheduleId, newStatus) => {
-    const rec = attendanceMap[studentId]?.[scheduleId];
-    if (!rec) return setMessage({ type: "error", text: "Enregistre d'abord l'absence." });
-    if (String(rec.id).startsWith("temp-")) return setMessage({ type: "error", text: "Attends la sauvegarde du serveur." });
+  // ── mark all absent for a slot ────────────────────────────────────────────
+  const markAllAbsent = async (slotIdx) => {
+    const slot    = slots[slotIdx];
+    const session = slot.session;
+    if (!session.is_editable) return showToast("info", "Session soumise.");
 
-    setCellBusy(studentId, scheduleId, true);
-    const prevStatus = rec.status;
+    const toMark = slot.students.filter(s => s.status === "PRESENT");
+    if (!toMark.length) return showToast("info", "Tous déjà marqués.");
+
+    const prevStudents = [...slot.students];
     // optimistic
-    setAttendanceMap(prev => {
-      const copy = { ...prev };
-      copy[studentId] = { ...(copy[studentId] || {}) };
-      copy[studentId][scheduleId] = { ...copy[studentId][scheduleId], status: newStatus };
-      return copy;
-    });
-    pushUndo({ type: "status", studentId, scheduleId, prevStatus });
+    setSlots(prev => prev.map((s, i) => i !== slotIdx ? s : {
+      ...s,
+      students: s.students.map(st =>
+        st.status === "PRESENT" ? { ...st, status: "ABSENT", absence_id: "temp" } : st
+      ),
+    }));
 
-    try {
-      // need full payload for PUT: include student, schedule_entry, date, status
-      const payload = buildAttendancePayload(studentId, scheduleId, date, newStatus);
-      await putData(`/attendances/${rec.id}/`, payload);
-      setMessage({ type: "success", text: "Statut mis à jour." });
-    } catch (err) {
-      console.error(err);
-      // revert
-      setAttendanceMap(prev => {
-        const copy = { ...prev };
-        copy[studentId] = { ...(copy[studentId] || {}) };
-        copy[studentId][scheduleId] = { ...copy[studentId][scheduleId], status: prevStatus };
-        return copy;
-      });
-      setMessage({ type: "error", text: "Impossible de modifier le statut." });
-      popUndo();
-    } finally {
-      setCellBusy(studentId, scheduleId, false);
-    }
-  };
+    const results = await Promise.allSettled(
+      toMark.map(s => postData("/academics/attendance/absences/", {
+        session: session.id, student: s.id, status: "ABSENT",
+      }))
+    );
 
-  /* --- Bulk mark absent for a whole schedule entry (course) --- */
-  const bulkMarkAbsent = async (scheduleEntryId) => {
-    if (!students.length) return;
-    setBulkSaving(true);
-    const toCreate = [];
-    students.forEach(s => {
-      if (!isCellAbsent(s.id, scheduleEntryId)) {
-        toCreate.push({ student: s.id, schedule_entry: scheduleEntryId, date, status: "ABSENT" });
-      }
-    });
-    if (!toCreate.length) {
-      setMessage({ type: "info", text: "Tous les élèves sont déjà marqués absents pour ce cours." });
-      setBulkSaving(false);
-      return;
-    }
-
-    // optimistic: mark them temporarily
-    const temps = toCreate.map(() => `temp-${Date.now()}-${Math.random().toString(36).slice(2,7)}`);
-    setAttendanceMap(prev => {
-      const copy = { ...prev };
-      toCreate.forEach((t, i) => {
-        const sId = t.student, seId = t.schedule_entry;
-        copy[sId] = { ...(copy[sId] || {}) };
-        copy[sId][seId] = { id: temps[i], status: "ABSENT" };
-      });
-      return copy;
-    });
-    pushUndo({ type: "bulk_create", entries: toCreate.map((t, i) => ({ studentId: t.student, scheduleId: t.schedule_entry, tempId: temps[i] })) });
-
-    try {
-      // do requests in parallel (limited -> if you want, chunk)
-      const promises = toCreate.map(p => postData("/attendances/", p));
-      const results = await Promise.allSettled(promises);
-      // map results back and replace temp ids with real ids where success
-      const successCount = results.reduce((acc, r) => acc + (r.status === "fulfilled" ? 1 : 0), 0);
-      let idx = 0;
-      setAttendanceMap(prev => {
-        const copy = { ...prev };
-        toCreate.forEach((t, i) => {
-          const sId = t.student, seId = t.schedule_entry;
-          const res = results[i];
-          if (res.status === "fulfilled") {
-            const created = res.value;
-            copy[sId] = { ...(copy[sId] || {}) };
-            copy[sId][seId] = { id: created.id, status: created.status || "ABSENT" };
-          } else {
-            // remove failed ones
-            if (copy[sId]) {
-              const row = { ...(copy[sId]) };
-              // attempt remove temp value (we don't have temp id here reliably)
-              delete row[seId];
-              copy[sId] = Object.keys(row).length ? row : undefined;
-            }
-          }
-        });
-        return copy;
-      });
-      setMessage({ type: successCount === toCreate.length ? "success" : "info", text: `${successCount} / ${toCreate.length} absences enregistrées.` });
-    } catch (err) {
-      console.error(err);
-      setMessage({ type: "error", text: "Erreur lors du marquage en masse." });
-    } finally {
-      setBulkSaving(false);
-    }
-  };
-
-  /* --- Undo utilities --- */
-  const pushUndo = (action) => {
-    setUndoStack(s => [action, ...s].slice(0, 20));
-  };
-  const popUndo = () => {
-    setUndoStack(s => s.slice(1));
-  };
-  const handleUndo = async () => {
-    const actions = [...undoStack];
-    if (!actions.length) return setMessage({ type: "info", text: "Rien à annuler." });
-    const action = actions[0];
-    // optimistic: apply reverse locally then call backend as needed
-    if (action.type === "create") {
-      // created absence with tempId -> remove it locally and try delete on server if id real
-      const { studentId, scheduleId, tempId } = action;
-      setAttendanceMap(prev => {
-        const copy = { ...prev };
-        if (copy[studentId]) {
-          const row = { ...(copy[studentId]) };
-          // if id equals tempId or exists, remove
-          if (row[scheduleId] && String(row[scheduleId].id).startsWith("temp-")) {
-            delete row[scheduleId];
-            copy[studentId] = Object.keys(row).length ? row : undefined;
-          }
+    let ok = 0;
+    setSlots(prev => prev.map((sl, i) => {
+      if (i !== slotIdx) return sl;
+      const studentsCopy = [...sl.students];
+      toMark.forEach((s, idx) => {
+        const r = results[idx];
+        const pos = studentsCopy.findIndex(st => st.id === s.id);
+        if (pos === -1) return;
+        if (r.status === "fulfilled") {
+          studentsCopy[pos] = { ...studentsCopy[pos], absence_id: r.value.id, status: r.value.status };
+          ok++;
+        } else {
+          studentsCopy[pos] = prevStudents.find(ps => ps.id === s.id) || studentsCopy[pos];
         }
-        return copy;
       });
-      popUndo();
-      setMessage({ type: "success", text: "Annulé localement." });
-    } else if (action.type === "delete") {
-      // we deleted an absence and kept the record; recreate it on server if needed
-      const { studentId, scheduleId, record } = action;
-      // optimistic re-add locally
-      setAttendanceMap(prev => {
-        const copy = { ...prev };
-        copy[studentId] = { ...(copy[studentId] || {}) };
-        copy[studentId][scheduleId] = record;
-        return copy;
-      });
-      // if record.id is real, try to recreate on server by POST (server will reject if duplicate)
-      if (String(record.id).startsWith("temp-")) {
-        popUndo();
-        setMessage({ type: "success", text: "Annulation locale effectuée." });
-        return;
-      }
-      try {
-        const payload = buildAttendancePayload(studentId, scheduleId, date, record.status || "ABSENT");
-        const created = await postData("/attendances/", payload);
-        // set id to newly created id
-        setAttendanceMap(prev => {
-          const copy = { ...prev };
-          copy[studentId] = { ...(copy[studentId] || {}) };
-          copy[studentId][scheduleId] = { id: created.id, status: created.status || "ABSENT" };
-          return copy;
-        });
-        setMessage({ type: "success", text: "Absence rétablie." });
-      } catch (err) {
-        console.error(err);
-        setMessage({ type: "error", text: "Impossible de rétablir l'absence." });
-      } finally {
-        popUndo();
-      }
-    } else if (action.type === "status") {
-      // revert to prevStatus
-      const { studentId, scheduleId, prevStatus } = action;
-      const rec = attendanceMap[studentId]?.[scheduleId];
-      if (!rec || String(rec.id).startsWith("temp-")) {
-        popUndo();
-        return setMessage({ type: "info", text: "Rien à annuler côté serveur." });
-      }
-      // optimistic
-      setAttendanceMap(prev => {
-        const copy = { ...prev };
-        copy[studentId] = { ...(copy[studentId] || {}) };
-        copy[studentId][scheduleId] = { ...copy[studentId][scheduleId], status: prevStatus };
-        return copy;
-      });
-      try {
-        const payload = buildAttendancePayload(studentId, scheduleId, date, prevStatus);
-        await putData(`/attendances/${rec.id}/`, payload);
-        setMessage({ type: "success", text: "Statut restauré." });
-      } catch (err) {
-        console.error(err);
-        setMessage({ type: "error", text: "Impossible de restaurer le statut." });
-      } finally {
-        popUndo();
-      }
-    } else if (action.type === "bulk_create") {
-      // remove all temp markers and try to delete created items if they exist
-      // simple approach: re-fetch sheet (safer)
-      await fetchSheet(selectedClass, date);
-      popUndo();
-      setMessage({ type: "success", text: "Opération annulée (rechargé)." });
+      return { ...sl, students: studentsCopy };
+    }));
+
+    pushUndo({ type: "bulk_absent", slotIdx, prevStudents });
+    showToast(ok === toMark.length ? "success" : "info", `${ok}/${toMark.length} absences enregistrées.`);
+  };
+
+  // ── submit session ─────────────────────────────────────────────────────────
+  const submitSession = async (slotIdx) => {
+    const session = slots[slotIdx].session;
+    if (!session.is_editable) return;
+    setPendingSession(p => ({ ...p, [session.id]: true }));
+    try {
+      await postData(`/academics/attendance/sessions/${session.id}/submit/`, {});
+      updateSessionInSlot(slotIdx, s => ({ ...s, status: "SUBMITTED", is_editable: false }));
+      showToast("success", "Session validée. Notifications envoyées aux parents.");
+    } catch (e) {
+      showToast("error", e?.body?.detail ?? "Impossible de valider la session.");
+    } finally {
+      setPendingSession(p => ({ ...p, [session.id]: false }));
     }
   };
 
-  /* --- Keyboard navigation --- */
+  // ── reopen session (admin) ────────────────────────────────────────────────
+  const reopenSession = async (slotIdx) => {
+    const session = slots[slotIdx].session;
+    setPendingSession(p => ({ ...p, [session.id]: true }));
+    try {
+      await postData(`/academics/attendance/sessions/${session.id}/reopen/`, {});
+      updateSessionInSlot(slotIdx, s => ({ ...s, status: "OPEN", is_editable: true }));
+      showToast("success", "Session réouverte.");
+    } catch (e) {
+      showToast("error", e?.body?.detail ?? "Impossible de rouvrir.");
+    } finally {
+      setPendingSession(p => ({ ...p, [session.id]: false }));
+    }
+  };
+
+  // ── cancel session ────────────────────────────────────────────────────────
+  const cancelSession = async (slotIdx) => {
+    if (!window.confirm("Annuler ce cours ? Aucune présence ne sera comptabilisée.")) return;
+    const session = slots[slotIdx].session;
+    setPendingSession(p => ({ ...p, [session.id]: true }));
+    try {
+      await postData(`/academics/attendance/sessions/${session.id}/cancel/`, {});
+      updateSessionInSlot(slotIdx, s => ({ ...s, status: "CANCELLED", is_editable: false }));
+      showToast("info", "Session annulée.");
+    } catch (e) {
+      showToast("error", e?.body?.detail ?? "Impossible d'annuler.");
+    } finally {
+      setPendingSession(p => ({ ...p, [session.id]: false }));
+    }
+  };
+
+  // ── undo ──────────────────────────────────────────────────────────────────
+  const pushUndo = (action) => setUndoStack(s => [action, ...s].slice(0, 30));
+  const popUndo  = ()       => setUndoStack(s => s.slice(1));
+
+  const handleUndo = async () => {
+    if (!undoStack.length) return showToast("info", "Rien à annuler.");
+    const action = undoStack[0];
+    popUndo();
+
+    if (action.type === "marked_absent") {
+      const { slotIdx, studentId, absenceId, prev } = action;
+      updateStudentInSlot(slotIdx, studentId, () => prev);
+      try { await deleteData(`/academics/attendance/absences/${absenceId}/`); }
+      catch { showToast("error", "Undo impossible."); }
+    } else if (action.type === "restored_present") {
+      const { slotIdx, studentId, prev } = action;
+      updateStudentInSlot(slotIdx, studentId, () => prev);
+      try {
+        const session = slots[slotIdx].session;
+        const res = await postData("/academics/attendance/absences/", {
+          session: session.id, student: studentId, status: prev.status,
+        });
+        updateStudentInSlot(slotIdx, studentId, s => ({ ...s, absence_id: res.id }));
+      } catch { showToast("error", "Undo impossible."); }
+    } else if (action.type === "status_changed") {
+      const { slotIdx, studentId, prev } = action;
+      const student = slots[slotIdx].students.find(s => s.id === studentId);
+      if (student?.absence_id) {
+        updateStudentInSlot(slotIdx, studentId, () => prev);
+        try { await patchData(`/academics/attendance/absences/${student.absence_id}/`, { status: prev.status }); }
+        catch { showToast("error", "Undo impossible."); }
+      }
+    } else if (action.type === "bulk_absent") {
+      // full refetch is safest
+      await fetchSheet(selectedClass, date);
+    }
+    showToast("success", "Action annulée.");
+  };
+
+  // ── keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {
-      // only process if container is visible / focused
-      if (!containerRef.current) return;
-      // ignore if typing in input
       const active = document.activeElement;
-      if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) return;
-
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setFocusCell(f => ({ studentIndex: Math.min(f.studentIndex + 1, Math.max(0, students.length - 1)), scheduleIndex: f.scheduleIndex }));
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setFocusCell(f => ({ studentIndex: Math.max(f.studentIndex - 1, 0), scheduleIndex: f.scheduleIndex }));
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        setFocusCell(f => ({ studentIndex: f.studentIndex, scheduleIndex: Math.min(f.scheduleIndex + 1, Math.max(0, schedule.length - 1)) }));
-      } else if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        setFocusCell(f => ({ studentIndex: f.studentIndex, scheduleIndex: Math.max(f.scheduleIndex - 1, 0) }));
-      } else if (e.key === " ") {
-        e.preventDefault();
-        // toggle focused cell
-        const s = students[focusCell.studentIndex];
-        const se = schedule[focusCell.scheduleIndex];
-        if (s && se) toggleCell(s.id, se.id);
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      if (active && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName)) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         handleUndo();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [students, schedule, focusCell, attendanceMap, cellPending, selectedClass, date, undoStack, fetchSheet]);
+  }, [undoStack, handleUndo]);
 
-  /* --- derived values --- */
-  const totalStudents = students.length;
+  // ── derived ───────────────────────────────────────────────────────────────
+  const totalAbsentToday = slots.reduce((sum, slot) => {
+    const submitted = slot.session?.status === "SUBMITTED";
+    if (!submitted) return sum;
+    return sum + slot.students.filter(s => NON_PRESENT.includes(s.status)).length;
+  }, 0);
 
-  /* --- small UI helpers --- */
-  function formatTimeRange(entry) {
-    if (!entry) return "";
-    return `${entry.starts_at || ""}${entry.ends_at ? ` — ${entry.ends_at}` : ""}`;
-  }
+  const submittedCount = slots.filter(s => s.session?.status === "SUBMITTED").length;
 
-  /* --- Render --- */
+  // ── render ────────────────────────────────────────────────────────────────
   return (
-    <div ref={containerRef} className="min-h-screen bg-slate-50 text-slate-800 pb-20">
-      {/* Header */}
-      <div className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm bg-opacity-90 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="bg-indigo-100 p-2 rounded-lg text-indigo-600">
-                <FaBook size={20} />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-slate-900">Prise de présence</h1>
-                <p className="text-xs text-slate-500">Construite « à la demande » pour la date sélectionnée</p>
-              </div>
+    <div className="min-h-screen bg-slate-50 pb-20" style={{ fontFamily: "'DM Sans', 'Manrope', sans-serif" }}>
+
+      {/* ── HEADER ─────────────────────────────────────────────────────── */}
+      <div className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200 shadow-sm">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+
+          {/* title */}
+          <div className="flex items-center gap-3 mr-auto">
+            <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shadow">
+              <FaUserCheck className="text-white" size={15} />
             </div>
-
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-slate-100 p-2 rounded-lg border border-slate-200">
-                <FaCalendarAlt className="text-slate-500" />
-                <input
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="bg-transparent text-sm outline-none"
-                  aria-label="Date de la feuille"
-                />
+            <div>
+              <div className="text-sm font-bold text-slate-900 leading-none">Prise de présence</div>
+              <div className="text-[11px] text-slate-400 mt-0.5">
+                {slots.length > 0
+                  ? `${weekdays[new Date(date + "T12:00").getDay() === 0 ? 6 : new Date(date + "T12:00").getDay() - 1]} · ${slots.length} cours`
+                  : "Aucun cours"}
               </div>
-
-              <div className="w-64">
-                <select
-                  className="w-full text-sm border-none bg-slate-50 rounded-lg py-2 px-3 text-slate-600 focus:ring-0 cursor-pointer"
-                  value={selectedClass || ""}
-                  onChange={(e) => setSelectedClass(e.target.value)}
-                >
-                  {classesLoading ? <option>Chargement...</option> : (
-                    <>
-                      <option value="" disabled>-- Choisir une classe --</option>
-                      {classes.map(c => <option key={c.id} value={c.id}>{c.name} · {c.level?.name}</option>)}
-                    </>
-                  )}
-                </select>
-              </div>
-
-              <button
-                onClick={() => fetchSheet(selectedClass, date)}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg shadow transition flex items-center gap-2 text-sm"
-              >
-                <FaSpinner className="animate-spin mr-1" /> Recharger
-              </button>
-
-              <button
-                onClick={handleUndo}
-                className="bg-white border border-slate-200 hover:bg-slate-50 px-3 py-2 rounded-lg flex items-center gap-2 text-sm"
-                title="Annuler dernière action (Ctrl+Z)"
-              >
-                <FaUndo /> Annuler
-              </button>
             </div>
           </div>
+
+          {/* date nav */}
+          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+            <button onClick={() => setDate(d => shiftDate(d, -1))}
+              className="p-1.5 rounded-md hover:bg-white hover:shadow-sm transition text-slate-500">
+              <FaChevronLeft size={11} />
+            </button>
+            <div className="relative flex items-center gap-2 px-2">
+              <FaCalendarAlt className="text-slate-400" size={12} />
+              <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                className="bg-transparent text-sm font-medium text-slate-700 outline-none w-[130px] cursor-pointer" />
+            </div>
+            <button onClick={() => setDate(localDateISO(new Date()))}
+              className="text-[11px] px-2 py-1.5 rounded-md bg-indigo-600 text-white font-medium hover:bg-indigo-700 transition">
+              Auj.
+            </button>
+            <button onClick={() => setDate(d => shiftDate(d, +1))}
+              className="p-1.5 rounded-md hover:bg-white hover:shadow-sm transition text-slate-500">
+              <FaChevronRight size={11} />
+            </button>
+          </div>
+
+          {/* class selector */}
+          <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)}
+            className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 outline-none focus:border-indigo-400 min-w-[180px]">
+            {classesLoading
+              ? <option>Chargement...</option>
+              : classes.map(c => <option key={c.id} value={c.id}>{c.name}{c.level?.name ? ` · ${c.level.name}` : ""}</option>)
+            }
+          </select>
+
+          {/* undo */}
+          <button onClick={handleUndo} disabled={!undoStack.length}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-40 transition">
+            <FaUndo size={11} /> Annuler
+          </button>
         </div>
-      </div>
 
-      {/* Toast */}
-      {message && (
-        <div className={`fixed bottom-5 right-5 z-50 px-5 py-4 rounded-xl shadow-2xl flex items-center gap-3 border animate-fadeIn cursor-pointer ${
-            message.type === 'error' ? 'bg-red-50 border-red-100 text-red-800' : message.type === 'success' ? 'bg-emerald-50 border-emerald-100 text-emerald-800' : 'bg-slate-50 border-slate-100 text-slate-700'
-        }`} onClick={() => setMessage(null)}>
-          {message.type === 'error' ? <FaTimes /> : <FaCheck />}
-          <span className="font-medium text-sm">{message.text}</span>
-        </div>
-      )}
-
-      {/* Main */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Empty state */}
-        {(!selectedClass) ? (
-          <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-slate-500">
-            Sélectionne une classe et une date pour construire la feuille de présence.
-          </div>
-        ) : loadingSheet ? (
-          <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-slate-500">
-            Chargement de la feuille...
-          </div>
-        ) : schedule.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-slate-500">
-            Aucun cours prévu ce jour pour cette classe.
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {/* course headers */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {schedule.map((entry, idx) => (
-                <div key={entry.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-                  <div className="flex items-start gap-3">
-                    <div className="flex-1">
-                      <div className="text-xs text-slate-400 uppercase tracking-wider font-semibold">{entry.subject}</div>
-                      <h3 className="text-lg font-bold text-slate-800 mt-1">{formatTimeRange(entry)}</h3>
-                      <div className="text-xs text-slate-500 mt-2">{entry.teacher || "Professeur N/A"}</div>
-                    </div>
-                    <div className="flex flex-col items-end gap-2">
-                      <button
-                        onClick={() => bulkMarkAbsent(entry.id)}
-                        disabled={bulkSaving}
-                        className="text-xs px-3 py-1 rounded-md bg-red-50 text-red-600 hover:bg-red-100"
-                        title="Marquer tous absents"
-                      >
-                        {bulkSaving ? <FaSpinner className="animate-spin" /> : "Tous absents"}
-                      </button>
-                      <div className="text-xs text-slate-400">{totalStudents} élèves</div>
-                    </div>
-                  </div>
-                  <div className="mt-4 border-t border-slate-100 pt-3 max-h-[42vh] overflow-y-auto">
-                    {students.map((s, sIdx) => {
-                      const rec = attendanceMap[s.id]?.[entry.id];
-                      const pending = !!cellPending[cellKey(s.id, entry.id)];
-                      const focused = focusCell.studentIndex === sIdx && focusCell.scheduleIndex === idx;
-                      return (
-                        <div
-                          key={`${s.id}_${entry.id}`}
-                          className={`flex items-center justify-between gap-3 p-2 rounded-lg mb-2 ${rec ? 'bg-red-50 border border-red-100' : 'bg-white border border-slate-100'} ${focused ? 'ring-2 ring-indigo-200' : ''} hover:shadow-sm`}
-                          onClick={() => toggleCell(s.id, entry.id)}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold ${rec ? 'bg-red-100 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                              {rec ? <FaUserTimes /> : <FaUserCheck />}
-                            </div>
-                            <div>
-                              <div className="font-medium text-sm text-slate-800">{renderName(s)}</div>
-                              <div className="text-xs text-slate-400">{s.registration_number || ''}</div>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            {rec ? (
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs px-2 py-1 rounded-full bg-red-100 text-red-700">{rec.status}</span>
-                                <div className="relative">
-                                  <select
-                                    value={rec.status}
-                                    onChange={(e) => changeStatus(s.id, entry.id, e.target.value)}
-                                    disabled={pending}
-                                    className="text-xs border-none bg-transparent cursor-pointer"
-                                    title="Changer statut"
-                                  >
-                                    <option value="ABSENT">ABSENT</option>
-                                    <option value="LATE">LATE</option>
-                                    <option value="EXCUSED">EXCUSED</option>
-                                  </select>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="text-xs text-slate-400">Présent (par défaut)</div>
-                            )}
-                            <button
-                              onClick={(ev) => { ev.stopPropagation(); toggleCell(s.id, entry.id); }}
-                              disabled={pending}
-                              title={rec ? "Marquer présent" : "Marquer absent"}
-                              className={`p-2 rounded-md ${pending ? 'bg-slate-100' : rec ? 'bg-white hover:bg-red-50' : 'bg-white hover:bg-emerald-50'}`}
-                            >
-                              {pending ? <FaSpinner className="animate-spin" /> : (rec ? <FaTimes /> : <FaCheck />)}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
+        {/* progress bar */}
+        {slots.length > 0 && (
+          <div className="max-w-6xl mx-auto px-4 pb-2 flex items-center gap-3">
+            <div className="flex-1 h-1 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-indigo-500 rounded-full transition-all duration-500"
+                style={{ width: `${slots.length ? (submittedCount / slots.length) * 100 : 0}%` }}
+              />
             </div>
-
-            {/* footer info */}
-            <div className="flex items-center justify-between bg-white border border-slate-200 p-4 rounded-xl">
-              <div className="text-sm text-slate-600">
-                <strong>{students.length}</strong> élèves · <strong>{schedule.length}</strong> cours · Date : <strong>{date}</strong>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <button onClick={() => fetchSheet(selectedClass, date)} className="px-3 py-2 bg-white border rounded-md">Recharger</button>
-                <button onClick={() => { setDate(prev => shiftLocalDate(prev, -1)); }} className="px-3 py-2 bg-white border rounded-md"><FaChevronLeft /></button>
-                <button onClick={() => { setDate(localDateISO(new Date())); }} className="px-3 py-2 bg-indigo-600 text-white rounded-md">Aujourd'hui</button>
-                <button onClick={() => { setDate(prev => shiftLocalDate(prev, +1)); }} className="px-3 py-2 bg-white border rounded-md"><FaChevronRight /></button>
-              </div>
-            </div>
+            <span className="text-[11px] text-slate-400 whitespace-nowrap">
+              {submittedCount}/{slots.length} validés
+              {totalAbsentToday > 0 && ` · ${totalAbsentToday} absent${totalAbsentToday > 1 ? "s" : ""}`}
+            </span>
           </div>
         )}
       </div>
 
-      <style>{`
-        @keyframes fadeIn { from { opacity: 0; transform: scale(0.98);} to { opacity: 1; transform: scale(1);} }
-        .animate-fadeIn { animation: fadeIn 0.18s ease-out forwards; }
-      `}</style>
+      {/* ── MAIN ────────────────────────────────────────────────────────── */}
+      <div className="max-w-6xl mx-auto px-4 py-6">
+
+        {!selectedClass && (
+          <EmptyState icon={<FaCalendarAlt size={28} />} text="Sélectionne une classe pour commencer." />
+        )}
+
+        {selectedClass && loadingSheet && (
+          <EmptyState icon={<FaSpinner className="animate-spin" size={24} />} text="Chargement..." />
+        )}
+
+        {selectedClass && !loadingSheet && slots.length === 0 && (
+          <EmptyState icon={<FaCalendarAlt size={28} />} text="Aucun cours prévu ce jour pour cette classe." />
+        )}
+
+        {!loadingSheet && slots.length > 0 && (
+          <div className="space-y-3">
+            {slots.map((slot, slotIdx) => (
+              <SlotCard
+                key={slot.session?.id ?? slotIdx}
+                slotIdx={slotIdx}
+                slot={slot}
+                expanded={!!expandedSlots[slotIdx]}
+                onToggleExpand={() => setExpandedSlots(p => ({ ...p, [slotIdx]: !p[slotIdx] }))}
+                pendingCells={pendingCells}
+                sessionPending={!!pendingSession[slot.session?.id]}
+                isBusy={isBusy}
+                onToggleAbsence={toggleAbsence}
+                onChangeStatus={changeStatus}
+                onMarkAllAbsent={markAllAbsent}
+                onSubmit={submitSession}
+                onReopen={reopenSession}
+                onCancel={cancelSession}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── TOAST ───────────────────────────────────────────────────────── */}
+      {toast && (
+        <div onClick={() => setToast(null)}
+          className={`fixed bottom-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-xl border text-sm font-medium cursor-pointer transition-all
+            ${toast.type === "error"   ? "bg-red-50 border-red-200 text-red-800" :
+              toast.type === "success" ? "bg-emerald-50 border-emerald-200 text-emerald-800" :
+                                          "bg-slate-50 border-slate-200 text-slate-700"}`}>
+          {toast.type === "error" ? <FaTimes size={12} /> :
+           toast.type === "success" ? <FaCheck size={12} /> : <FaBell size={12} />}
+          {toast.text}
+        </div>
+      )}
     </div>
   );
 }
 
-/* ----------------- Helpers ----------------- */
+// ─── SlotCard ────────────────────────────────────────────────────────────────
 
-function renderName(p) {
-  if (!p) return "Inconnu";
-  if (p.user && (p.user.first_name || p.user.last_name)) return `${p.user.last_name || ''} ${p.user.first_name || ''}`.trim();
-  if (p.first_name || p.last_name) return `${p.last_name || ''} ${p.first_name || ''}`.trim();
-  return p.name || p.username || "Utilisateur";
+function SlotCard({
+  slotIdx, slot, expanded, onToggleExpand,
+  isBusy, onToggleAbsence, onChangeStatus,
+  onMarkAllAbsent, onSubmit, onReopen, onCancel,
+  sessionPending,
+}) {
+  const { entry, session, students } = slot;
+  const statusMeta  = SESSION_STATUS_META[session?.status] ?? SESSION_STATUS_META.OPEN;
+  const isEditable  = session?.is_editable;
+  const isSubmitted = session?.status === "SUBMITTED";
+  const isCancelled = session?.status === "CANCELLED";
+
+  const absentCount  = students.filter(s => s.status === "ABSENT").length;
+  const lateCount    = students.filter(s => s.status === "LATE").length;
+  const excusedCount = students.filter(s => s.status === "EXCUSED").length;
+  const presentCount = students.filter(s => s.status === "PRESENT").length;
+  const total        = students.length;
+
+  return (
+    <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all
+      ${isSubmitted ? "border-emerald-200" : isCancelled ? "border-slate-200 opacity-60" : "border-slate-200"}`}>
+
+      {/* ── slot header ─── */}
+      <div
+        className={`flex items-center gap-4 px-5 py-4 cursor-pointer select-none
+          ${isSubmitted ? "bg-emerald-50/50" : isCancelled ? "bg-slate-50" : "bg-white"}`}
+        onClick={onToggleExpand}
+      >
+        {/* time + subject */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-base font-bold text-slate-800">{entry?.subject ?? "—"}</span>
+            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${statusMeta.bg} ${statusMeta.text}`}>
+              {statusMeta.icon} {statusMeta.label}
+            </span>
+          </div>
+          <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-3">
+            <span>{entry?.starts_at?.slice(0,5)} — {entry?.ends_at?.slice(0,5)}</span>
+            <span>{entry?.teacher}</span>
+          </div>
+        </div>
+
+        {/* pill counters */}
+        <div className="hidden sm:flex items-center gap-1.5">
+          {absentCount  > 0 && <Pill n={absentCount}  label="abs" color="red" />}
+          {lateCount    > 0 && <Pill n={lateCount}    label="ret" color="amber" />}
+          {excusedCount > 0 && <Pill n={excusedCount} label="exc" color="sky" />}
+          <Pill n={presentCount} label="prés" color="emerald" />
+        </div>
+
+        {/* chevron */}
+        <div className="text-slate-400">
+          {expanded ? <FaChevronUp size={12} /> : <FaChevronDown size={12} />}
+        </div>
+      </div>
+
+      {/* ── expanded content ─── */}
+      {expanded && !isCancelled && (
+        <div>
+          {/* toolbar */}
+          <div className="px-5 py-3 border-t border-b border-slate-100 bg-slate-50/50 flex flex-wrap items-center gap-2">
+            {isEditable && (
+              <>
+                <button onClick={() => onMarkAllAbsent(slotIdx)}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-700 font-medium hover:bg-red-100 transition flex items-center gap-1.5">
+                  <FaUserTimes size={11} /> Tous absents
+                </button>
+                <div className="flex-1" />
+                <button onClick={() => onCancel(slotIdx)}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-500 hover:text-red-600 hover:border-red-200 transition">
+                  Cours annulé
+                </button>
+                <button
+                  onClick={() => onSubmit(slotIdx)}
+                  disabled={sessionPending}
+                  className="text-xs px-4 py-1.5 rounded-lg bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition flex items-center gap-2 shadow disabled:opacity-60">
+                  {sessionPending
+                    ? <><FaSpinner className="animate-spin" size={11} /> Validation...</>
+                    : <><FaBell size={11} /> Valider & notifier</>}
+                </button>
+              </>
+            )}
+            {isSubmitted && (
+              <>
+                <span className="text-xs text-emerald-600 font-medium flex items-center gap-1.5">
+                  <FaCheck size={10} /> Validé — parents notifiés
+                </span>
+                <div className="flex-1" />
+                <button onClick={() => onReopen(slotIdx)} disabled={sessionPending}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-amber-50 hover:border-amber-200 hover:text-amber-700 transition flex items-center gap-1.5 disabled:opacity-60">
+                  {sessionPending ? <FaSpinner className="animate-spin" size={11} /> : <FaRedo size={11} />} Rouvrir
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* student list */}
+          <div className="divide-y divide-slate-50">
+            {students.map(student => (
+              <StudentRow
+                key={student.id}
+                student={student}
+                isEditable={isEditable}
+                busy={isBusy(session.id, student.id)}
+                onToggle={() => onToggleAbsence(slotIdx, student)}
+                onChangeStatus={(newStatus) => onChangeStatus(slotIdx, student, newStatus)}
+              />
+            ))}
+          </div>
+
+          {/* slot footer */}
+          <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-100 flex items-center gap-4 text-xs text-slate-400">
+            <span><strong className="text-slate-600">{total}</strong> élèves</span>
+            <span><strong className="text-emerald-600">{presentCount}</strong> présents</span>
+            {absentCount > 0 && <span><strong className="text-red-600">{absentCount}</strong> absents</span>}
+            {lateCount > 0 && <span><strong className="text-amber-600">{lateCount}</strong> retards</span>}
+            {excusedCount > 0 && <span><strong className="text-sky-600">{excusedCount}</strong> excusés</span>}
+          </div>
+        </div>
+      )}
+
+      {expanded && isCancelled && (
+        <div className="px-5 py-6 text-center text-sm text-slate-400 border-t border-slate-100">
+          Ce cours a été annulé. Aucune présence comptabilisée.
+        </div>
+      )}
+    </div>
+  );
 }
 
+// ─── StudentRow ───────────────────────────────────────────────────────────────
+
+function StudentRow({ student, isEditable, busy, onToggle, onChangeStatus }) {
+  const isPresent = student.status === "PRESENT";
+  const meta      = STATUS_META[student.status] ?? STATUS_META.PRESENT;
+
+  return (
+    <div className={`flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50/60
+      ${!isPresent ? meta.bg : ""}`}>
+
+      {/* avatar dot */}
+      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${meta.dot}`} />
+
+      {/* name */}
+      <div className="flex-1 min-w-0">
+        <span className={`text-sm font-medium ${!isPresent ? meta.text : "text-slate-700"}`}>
+          {student.name}
+        </span>
+      </div>
+
+      {/* status label or selector */}
+      {!isPresent ? (
+        isEditable ? (
+          <select
+            value={student.status}
+            onChange={e => { e.stopPropagation(); onChangeStatus(e.target.value); }}
+            onClick={e => e.stopPropagation()}
+            className={`text-xs border rounded-lg px-2 py-1 font-semibold outline-none cursor-pointer ${meta.bg} ${meta.text} ${meta.border}`}>
+            <option value="ABSENT">Absent</option>
+            <option value="LATE">Retard</option>
+            <option value="EXCUSED">Excusé</option>
+          </select>
+        ) : (
+          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${meta.bg} ${meta.text}`}>
+            {meta.label}
+          </span>
+        )
+      ) : (
+        <span className="text-xs text-slate-400">Présent</span>
+      )}
+
+      {/* toggle button */}
+      {isEditable && (
+        <button
+          onClick={e => { e.stopPropagation(); onToggle(); }}
+          disabled={busy}
+          title={isPresent ? "Marquer absent" : "Marquer présent"}
+          className={`w-8 h-8 rounded-lg flex items-center justify-center transition flex-shrink-0
+            ${busy ? "bg-slate-100" :
+              isPresent ? "bg-slate-100 hover:bg-red-100 hover:text-red-600 text-slate-400" :
+                          "bg-white border border-slate-200 hover:bg-emerald-50 hover:text-emerald-600 text-slate-400"}`}>
+          {busy
+            ? <FaSpinner className="animate-spin" size={11} />
+            : isPresent ? <FaUserTimes size={11} /> : <FaUserCheck size={11} />}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── small shared components ──────────────────────────────────────────────────
+
+function Pill({ n, label, color }) {
+  const colors = {
+    red:     "bg-red-100 text-red-700",
+    amber:   "bg-amber-100 text-amber-700",
+    sky:     "bg-sky-100 text-sky-700",
+    emerald: "bg-emerald-100 text-emerald-700",
+  };
+  return (
+    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${colors[color] ?? ""}`}>
+      {n} {label}
+    </span>
+  );
+}
+
+function EmptyState({ icon, text }) {
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-400 flex flex-col items-center gap-4">
+      <div className="text-slate-300">{icon}</div>
+      <p className="text-sm">{text}</p>
+    </div>
+  );
+}
+
+// ─── date helpers ─────────────────────────────────────────────────────────────
+
 function localDateISO(d) {
-  // ensure local YYYY-MM-DD (not toISOString which uses UTC)
-  const date = d instanceof Date ? d : new Date(d);
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const mm   = String(d.getMonth() + 1).padStart(2, "0");
+  const dd   = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function shiftLocalDate(isoDateStr, deltaDays) {
-  const [y, m, d] = isoDateStr.split("-").map(Number);
+function shiftDate(isoStr, delta) {
+  const [y, m, d] = isoStr.split("-").map(Number);
   const dt = new Date(y, m - 1, d);
-  dt.setDate(dt.getDate() + deltaDays);
+  dt.setDate(dt.getDate() + delta);
   return localDateISO(dt);
 }
