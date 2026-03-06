@@ -1,1068 +1,1069 @@
-import React, { useEffect, useMemo, useState, useRef } from "react";
-import { FaEdit, FaTrash, FaPlus, FaFilter, FaPrint, FaFilePdf, FaClock, FaMapMarkerAlt } from "react-icons/fa";
+// src/pages/Timetable.jsx
+import React, {
+  useCallback, useEffect, useMemo,
+  useRef, useState,
+} from "react";
+import {
+  FaEdit, FaTrash, FaPlus, FaFilePdf,
+  FaClock, FaMapMarkerAlt, FaChalkboardTeacher,
+  FaCheck, FaSyncAlt, FaTimes, FaExclamationTriangle,
+  FaMoon, FaSun, FaGraduationCap, FaCalendarAlt,
+  FaBookOpen, FaSearch,
+} from "react-icons/fa";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { fetchData, postData, patchData, deleteData } from "./api";
+import {
+  ThemeCtx, useTheme, LIGHT, DARK,
+  SECTION_PALETTE, BASE_KEYFRAMES,
+} from "./theme";
 
-const weekdays = [
-  { value: 1, label: "Lundi" },
-  { value: 2, label: "Mardi" },
-  { value: 3, label: "Mercredi" },
-  { value: 4, label: "Jeudi" },
-  { value: 5, label: "Vendredi" },
-  { value: 6, label: "Samedi" },
+const COL = SECTION_PALETTE.academic; // bleu → cyan
+
+/* ──────────────────────────────────────────────────────────────────
+   CONSTANTS
+────────────────────────────────────────────────────────────────── */
+const WEEKDAYS = [
+  { v: 1, label: "Lundi"    },
+  { v: 2, label: "Mardi"    },
+  { v: 3, label: "Mercredi" },
+  { v: 4, label: "Jeudi"    },
+  { v: 5, label: "Vendredi" },
+  { v: 6, label: "Samedi"   },
 ];
 
-const CLASS_COLORS = [
-  { bg: "bg-slate-700", text: "text-white", swatch: "bg-slate-700" },
-  { bg: "bg-emerald-700", text: "text-white", swatch: "bg-emerald-700" },
-  { bg: "bg-indigo-700", text: "text-white", swatch: "bg-indigo-700" },
-  { bg: "bg-rose-600", text: "text-white", swatch: "bg-rose-600" },
-  { bg: "bg-yellow-500", text: "text-black", swatch: "bg-yellow-500" },
-  { bg: "bg-cyan-700", text: "text-white", swatch: "bg-cyan-700" },
-  { bg: "bg-purple-700", text: "text-white", swatch: "bg-purple-700" },
-  { bg: "bg-fuchsia-600", text: "text-white", swatch: "bg-fuchsia-600" },
-  { bg: "bg-orange-600", text: "text-white", swatch: "bg-orange-600" },
-  { bg: "bg-sky-600", text: "text-white", swatch: "bg-sky-600" },
+// Gradient pair per class (cycles if > 8 classes)
+const CLASS_GRADIENTS = [
+  ["#3b82f6","#06b6d4"],
+  ["#8b5cf6","#6366f1"],
+  ["#10b981","#14b8a6"],
+  ["#f97316","#ef4444"],
+  ["#f59e0b","#d97706"],
+  ["#db2777","#be185d"],
+  ["#0ea5e9","#0284c7"],
+  ["#84cc16","#10b981"],
 ];
 
-// Helper pour éviter les bugs d'affichage (08:00:00 vs 08:00)
-function formatTime(t) {
+const fmtTime = (t) => {
   if (!t) return "";
   const parts = String(t).split(":");
   return parts.length >= 2 ? `${parts[0]}:${parts[1]}` : t;
-}
+};
 
-function timeToMinutes(t) {
+const timeToMin = (t) => {
   if (!t) return 0;
-  const [h, m] = String(t).split(":").map(Number);
-  return h * 60 + (m || 0);
-}
+  const [h, m = "0"] = String(t).split(":");
+  return +h * 60 + +m;
+};
 
-export default function Timetable() {
-  // entriesMap : { [classId]: [entry, ...] }
-  const [entriesMap, setEntriesMap] = useState({});
-  const [classes, setClasses] = useState([]);
-  const [timeSlots, setTimeSlots] = useState([]);
-  const [loading, setLoading] = useState(true); // global loading for initial data or ongoing fetches
-  const [error, setError] = useState("");
-  const [selectedClasses, setSelectedClasses] = useState([]);
-  const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState(null);
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [searchText, setSearchText] = useState("");
-  const [filterTeacher, setFilterTeacher] = useState("");
-  const [filterDay, setFilterDay] = useState("");
-  const pdfRef = useRef(null);
+const teacherName = (t) => {
+  if (!t) return "";
+  if (t.user && (t.user.first_name || t.user.last_name))
+    return `${t.user.first_name || ""} ${t.user.last_name || ""}`.trim();
+  if (t.first_name || t.last_name)
+    return `${t.first_name || ""} ${t.last_name || ""}`.trim();
+  return t.username || `Enseignant #${t.id}`;
+};
 
-  // Set to track classes currently being fetched (to show spinner per action if needed)
-  const [fetchingClassIds, setFetchingClassIds] = useState(new Set());
+/* ──────────────────────────────────────────────────────────────────
+   ATOMES UI
+────────────────────────────────────────────────────────────────── */
+const DarkToggle = () => {
+  const { dark, toggle } = useTheme();
+  const [hov, setHov] = useState(false);
+  return (
+    <button onClick={toggle} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        position:"relative", width:52, height:28, borderRadius:999, border:"none",
+        cursor:"pointer", flexShrink:0, outline:"none", transition:"all .3s",
+        background: dark ? "linear-gradient(135deg,#6366f1,#8b5cf6)"
+          : `linear-gradient(135deg,${COL.from},${COL.to})`,
+        boxShadow: hov ? `0 0 18px ${COL.shadow}` : "0 2px 8px rgba(0,0,0,.2)",
+      }}>
+      <div style={{
+        position:"absolute", top:2, width:24, height:24, borderRadius:999,
+        background:"#fff", display:"flex", alignItems:"center", justifyContent:"center",
+        transition:"all .3s", left: dark ? "calc(100% - 26px)" : 2,
+        boxShadow:"0 2px 6px rgba(0,0,0,.25)",
+      }}>
+        {dark ? <FaMoon style={{ width:11,height:11,color:"#6366f1" }} />
+               : <FaSun  style={{ width:11,height:11,color:COL.from  }} />}
+      </div>
+    </button>
+  );
+};
 
-  // Récupère uniquement classes + time-slots au début (plus léger)
-  const fetchInitial = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const [classesData, slotsData] = await Promise.all([
-        fetchData("/academics/school-classes/"),
-        fetchData("/academics/time-slots/"),
-      ]);
-      setClasses(Array.isArray(classesData) ? classesData : (classesData?.results || []));
-      const sortedSlots = (Array.isArray(slotsData) ? slotsData : (slotsData?.results || []))
-        .slice().sort((a,b) => (a.day - b.day) || (String(a.start_time).localeCompare(String(b.start_time))));
-      setTimeSlots(sortedSlots);
-      // Reset entriesMap: keep previous cache? we'll keep it to avoid wiping fetched classes earlier
-      // but if you want to clear cache on refresh, uncomment next line:
-      // setEntriesMap({});
-    } catch (err) {
-      console.error(err);
-      setError("Erreur de chargement initiale de l'API.");
-    } finally {
-      setLoading(false);
-    }
+const Toast = ({ msg, onClose }) => {
+  useEffect(() => { if (msg) { const t = setTimeout(onClose, 4500); return () => clearTimeout(t); } }, [msg]);
+  if (!msg) return null;
+  const isErr = msg.type === "error";
+  return (
+    <div onClick={onClose} style={{
+      position:"fixed", bottom:24, right:24, zIndex:300,
+      display:"flex", alignItems:"center", gap:10, padding:"13px 18px",
+      borderRadius:14, cursor:"pointer", fontWeight:700, fontSize:12,
+      color:"#fff", animation:"slideUp .3s cubic-bezier(.34,1.56,.64,1)", maxWidth:340,
+      background: isErr ? "linear-gradient(135deg,#ef4444,#dc2626)"
+        : `linear-gradient(135deg,${COL.from},${COL.to})`,
+      boxShadow: isErr ? "0 8px 24px #ef444444" : `0 8px 24px ${COL.shadow}`,
+    }}>
+      {isErr
+        ? <FaExclamationTriangle style={{ flexShrink:0,width:13,height:13 }} />
+        : <FaCheck style={{ flexShrink:0,width:13,height:13 }} />}
+      {msg.text}
+    </div>
+  );
+};
+
+/* Labeled field */
+const FL = ({ children }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  return (
+    <label style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
+      letterSpacing:"0.08em", color:T.textMuted, display:"block", marginBottom:5 }}>
+      {children}
+    </label>
+  );
+};
+
+/* Styled input for modal */
+const MI = (props) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  const [f, setF] = useState(false);
+  return (
+    <input {...props}
+      onFocus={(e) => { setF(true); props.onFocus?.(e); }}
+      onBlur={(e)  => { setF(false); props.onBlur?.(e); }}
+      style={{
+        width:"100%", boxSizing:"border-box",
+        padding:"9px 12px", fontSize:13, borderRadius:10, outline:"none",
+        background:T.inputBg, color:T.textPrimary,
+        border:`1.5px solid ${f ? COL.from : T.inputBorder}`,
+        boxShadow: f ? `0 0 0 3px ${COL.from}22` : "none",
+        transition:"all .15s", ...props.style,
+      }} />
+  );
+};
+
+/* Styled select for modal */
+const MS = ({ children, ...props }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  const [f, setF] = useState(false);
+  return (
+    <select {...props}
+      onFocus={(e) => { setF(true); props.onFocus?.(e); }}
+      onBlur={(e)  => { setF(false); props.onBlur?.(e); }}
+      style={{
+        width:"100%", padding:"9px 12px", fontSize:13, borderRadius:10, outline:"none",
+        background:T.inputBg, color:T.textPrimary,
+        border:`1.5px solid ${f ? COL.from : T.inputBorder}`,
+        boxShadow: f ? `0 0 0 3px ${COL.from}22` : "none",
+        appearance:"none", transition:"all .15s",
+      }}>
+      {children}
+    </select>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   ENTRY CHIP — une case dans la grille
+────────────────────────────────────────────────────────────────── */
+const EntryChip = ({ entry, gradient, onEdit, onDelete }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  const [hov, setHov] = useState(false);
+  const [from, to] = gradient;
+
+  return (
+    <div
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={{
+        borderLeft: `3px solid ${from}`,
+        borderRadius: "0 7px 7px 0",
+        padding: "5px 7px",
+        position: "relative",
+        transition: "all .15s",
+        background: hov
+          ? (dark ? `${from}28` : `${from}14`)
+          : (dark ? `${from}18` : `${from}0c`),
+        border: `1px solid ${hov ? from+"55" : from+"28"}`,
+        borderLeft: `3px solid ${from}`,
+      }}>
+      {/* Subject */}
+      <p style={{
+        fontSize: 11, fontWeight: 800, lineHeight: 1.2,
+        color: dark ? `${from}ee` : from,
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        maxWidth: 120,
+      }}>
+        {entry.subject_name || "—"}
+      </p>
+      {/* Teacher */}
+      <p style={{
+        fontSize: 10, color: T.textSecondary, marginTop: 1,
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120,
+        display: "flex", alignItems: "center", gap: 3,
+      }}>
+        <FaChalkboardTeacher style={{ width:8,height:8,flexShrink:0,color:T.textMuted }} />
+        {entry.teacher_name || "—"}
+      </p>
+      {/* Room */}
+      {entry.room && (
+        <p style={{
+          fontSize: 9, color: T.textMuted, marginTop: 2,
+          display: "flex", alignItems: "center", gap: 3,
+        }}>
+          <FaMapMarkerAlt style={{ width:7,height:7,flexShrink:0 }} />
+          {entry.room}
+        </p>
+      )}
+      {/* Hover actions */}
+      {hov && (
+        <div style={{
+          position: "absolute", top: 4, right: 4,
+          display: "flex", gap: 2,
+          animation: "fadeIn .1s ease-out",
+        }}>
+          <button onClick={(e) => { e.stopPropagation(); onEdit(entry); }}
+            style={{
+              width: 20, height: 20, borderRadius: 5, border: "none",
+              background: dark ? "#1e293b" : "#fff",
+              boxShadow: "0 1px 4px rgba(0,0,0,.2)",
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+              color: from,
+            }}>
+            <FaEdit style={{ width: 9, height: 9 }} />
+          </button>
+          <button onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
+            style={{
+              width: 20, height: 20, borderRadius: 5, border: "none",
+              background: dark ? "#1e293b" : "#fff",
+              boxShadow: "0 1px 4px rgba(0,0,0,.2)",
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+              color: "#ef4444",
+            }}>
+            <FaTrash style={{ width: 9, height: 9 }} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   MODAL ADD / EDIT
+────────────────────────────────────────────────────────────────── */
+const EntryModal = ({
+  form, setForm, onClose, onSubmit, saving,
+  classes, subjects, teachers, timeSlots,
+}) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+
+  // Slots disponibles pour le jour sélectionné
+  const slotsForDay = useMemo(
+    () => timeSlots.filter((s) => String(s.day) === String(form.weekday))
+          .slice().sort((a,b) => timeToMin(a.start_time) - timeToMin(b.start_time)),
+    [timeSlots, form.weekday]
+  );
+
+  const applySlot = (slotId) => {
+    const s = timeSlots.find((x) => String(x.id) === String(slotId));
+    if (s) setForm((prev) => ({ ...prev, starts_at: fmtTime(s.start_time), ends_at: fmtTime(s.end_time) }));
   };
 
-  useEffect(() => { fetchInitial(); }, []);
+  return (
+    <div style={{
+      position:"fixed", inset:0, zIndex:200,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16,
+      background:"rgba(2,6,23,.75)", backdropFilter:"blur(8px)",
+      animation:"fadeIn .18s ease-out",
+    }}>
+      <div style={{
+        width:"100%", maxWidth:520, maxHeight:"92vh",
+        display:"flex", flexDirection:"column", overflow:"hidden",
+        background:T.cardBg, border:`1px solid ${T.cardBorder}`,
+        borderRadius:20, boxShadow:"0 24px 64px rgba(0,0,0,.45)",
+        animation:"panelUp .3s cubic-bezier(.34,1.4,.64,1)",
+      }}>
+        {/* Bande */}
+        <div style={{ height:5, flexShrink:0, background:`linear-gradient(90deg,${COL.from},${COL.to})` }} />
 
-  // Fetch entries for a single class id and cache them
-  const fetchClassEntries = async (classId) => {
-    if (!classId) return;
-    // avoid duplicate fetches
-    if (fetchingClassIds.has(classId)) return;
-    // if already cached, don't refetch
-    if (entriesMap[classId] && entriesMap[classId].length) return;
+        {/* Header */}
+        <div style={{
+          display:"flex", alignItems:"center", justifyContent:"space-between",
+          padding:"14px 20px", borderBottom:`1px solid ${T.divider}`, flexShrink:0,
+        }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{
+              width:34, height:34, borderRadius:10, flexShrink:0,
+              display:"flex", alignItems:"center", justifyContent:"center",
+              background:`linear-gradient(135deg,${COL.from},${COL.to})`,
+              boxShadow:`0 4px 12px ${COL.shadow}`,
+            }}>
+              <FaCalendarAlt style={{ width:14,height:14,color:"#fff" }} />
+            </div>
+            <div>
+              <p style={{ fontSize:14, fontWeight:800, color:T.textPrimary }}>
+                {form.id ? "Modifier le cours" : "Ajouter un cours"}
+              </p>
+              <p style={{ fontSize:11, color:T.textMuted, marginTop:1 }}>
+                {form.id ? `Édition #${form.id}` : "Nouvelle entrée dans l'emploi du temps"}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose}
+            style={{ width:30,height:30,borderRadius:8,border:"none",cursor:"pointer",
+              background:"transparent",display:"flex",alignItems:"center",justifyContent:"center",
+              color:T.textMuted }}
+            onMouseEnter={(e) => { e.currentTarget.style.background="#ef444418"; e.currentTarget.style.color="#ef4444"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background="transparent"; e.currentTarget.style.color=T.textMuted; }}>
+            <FaTimes style={{ width:13,height:13 }} />
+          </button>
+        </div>
 
-    setFetchingClassIds(prev => new Set(prev).add(classId));
-    setLoading(true);
-    try {
-      const data = await fetchData(`/academics/timetable/?school_class=${classId}`);
-      const entriesForClass = Array.isArray(data) ? data : (data?.results || []);
-      setEntriesMap(prev => ({ ...prev, [classId]: entriesForClass }));
-    } catch (err) {
-      console.error(err);
-      setError("Erreur de chargement de l'emploi du temps pour la classe.");
-    } finally {
-      setFetchingClassIds(prev => {
-        const next = new Set(prev);
-        next.delete(classId);
-        return next;
-      });
-      setLoading(false);
-    }
-  };
+        {/* Body */}
+        <div style={{ flex:1, overflowY:"auto", padding:20, display:"flex", flexDirection:"column", gap:14 }}
+          className="custom-scrollbar">
 
-  // Refresh all currently selected classes (useful after create/update/delete)
-  const refreshSelectedClasses = async () => {
-    const ids = selectedClasses.slice();
-    if (!ids.length) return;
-    setLoading(true);
-    setError("");
-    try {
-      await Promise.all(ids.map(id => {
-        // force refetch by clearing cache first
-        setEntriesMap(prev => ({ ...prev, [id]: [] }));
-        return fetchClassEntries(id);
-      }));
-    } catch (err) {
-      console.error(err);
-      setError("Erreur de rafraîchissement des emplois du temps.");
-    } finally {
-      setLoading(false);
-    }
-  };
+          {/* Classe */}
+          <div>
+            <FL>Classe *</FL>
+            <MS value={form.school_class} onChange={(e) => setForm((p) => ({ ...p, school_class: e.target.value }))}>
+              <option value="">— Sélectionner une classe —</option>
+              {classes.map((c) => <option key={c.id} value={c.id}>{c.name} {c.level?.name ? `(${c.level.name})` : ""}</option>)}
+            </MS>
+          </div>
 
-  // Combine entries from entriesMap for selected classes
-  const combinedEntries = useMemo(() => {
-    const selected = selectedClasses.length ? selectedClasses : [];
-    let arr = [];
-    if (selected.length) {
-      selected.forEach(id => {
-        const list = entriesMap[id] || [];
-        if (Array.isArray(list)) arr = arr.concat(list);
-      });
-    }
-    // If no selected classes -> empty array (we avoid fetching everything)
-    return arr;
-  }, [entriesMap, selectedClasses]);
+          {/* Matière */}
+          <div>
+            <FL>Matière *</FL>
+            <MS value={form.subject} onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))}>
+              <option value="">— Sélectionner une matière —</option>
+              {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </MS>
+          </div>
 
-  const timeLabels = useMemo(() => {
-    const map = new Map();
-    timeSlots.forEach(s => {
-      const label = `${formatTime(s.start_time)} - ${formatTime(s.end_time)}`;
-      if (!map.has(label)) map.set(label, { start: s.start_time });
-    });
-    return Array.from(map.entries())
-      .map(([label, v]) => ({ label, start: v.start }))
-      .sort((a,b) => timeToMinutes(a.start) - timeToMinutes(b.start))
-      .map(x => x.label);
-  }, [timeSlots]);
+          {/* Enseignant */}
+          <div>
+            <FL>Enseignant</FL>
+            <MS value={form.teacher || ""} onChange={(e) => setForm((p) => ({ ...p, teacher: e.target.value }))}>
+              <option value="">— Sélectionner un enseignant —</option>
+              {teachers.map((t) => <option key={t.id} value={t.id}>{teacherName(t)}{t.subject?.name ? ` · ${t.subject.name}` : ""}</option>)}
+            </MS>
+          </div>
 
-  const isFilterActive = !!(searchText || filterTeacher || filterDay);
-  // selected for filtering: when selectedClasses exist use them, when not and filters active we can optionally search across cached classes only.
-  // Here: to avoid heavy fetching, if no selected classes but filter active we will search across cached entries only.
-  const displayedEntries = useMemo(() => {
-    const selected = selectedClasses.length ? selectedClasses : (isFilterActive ? Object.keys(entriesMap).map(Number) : []);
-    return combinedEntries.filter(e => {
-      if (!selected.includes(e.school_class)) return false;
-      if (searchText) {
-        const q = searchText.toLowerCase();
-        const any = `${e.subject_name || ""} ${e.teacher_name || ""} ${e.school_class_name || ""}`;
-        if (!any.toLowerCase().includes(q)) return false;
-      }
-      if (filterTeacher && String(e.teacher_name) !== String(filterTeacher)) return false;
-      if (filterDay && String(e.weekday) !== String(filterDay)) return false;
-      return true;
-    });
-  }, [combinedEntries, selectedClasses, searchText, filterTeacher, filterDay, entriesMap, isFilterActive]);
+          {/* Jour */}
+          <div>
+            <FL>Jour *</FL>
+            <MS value={form.weekday}
+              onChange={(e) => setForm((p) => ({ ...p, weekday: e.target.value, starts_at:"", ends_at:"" }))}>
+              <option value="">— Sélectionner un jour —</option>
+              {WEEKDAYS.map((d) => <option key={d.v} value={d.v}>{d.label}</option>)}
+            </MS>
+          </div>
 
-  const grid = useMemo(() => {
-    const g = {};
-    weekdays.forEach(d => {
-      g[d.value] = {};
-      timeLabels.forEach(t => (g[d.value][t] = []));
-    });
-    displayedEntries.forEach(e => {
-      const timeLabel = `${formatTime(e.starts_at)} - ${formatTime(e.ends_at)}`;
-      const wd = parseInt(e.weekday);
-      if (g[wd] && g[wd][timeLabel]) g[wd][timeLabel].push(e);
-    });
-    return g;
-  }, [displayedEntries, timeLabels]);
+          {/* Créneau horaire */}
+          {form.weekday && slotsForDay.length > 0 && (
+            <div>
+              <FL>Créneau prédéfini <span style={{ fontWeight:400,textTransform:"none",letterSpacing:0,fontSize:10 }}>(remplit les horaires)</span></FL>
+              <MS value="" onChange={(e) => applySlot(e.target.value)}>
+                <option value="">— Choisir un créneau —</option>
+                {slotsForDay.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {fmtTime(s.start_time)} → {fmtTime(s.end_time)}
+                  </option>
+                ))}
+              </MS>
+            </div>
+          )}
 
-  const classColorMap = useMemo(() => {
-    const map = {};
-    classes.forEach((c, idx) => {
-      map[c.id] = CLASS_COLORS[idx % CLASS_COLORS.length];
-    });
-    return map;
+          {/* Horaires manuels */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <div>
+              <FL>Début *</FL>
+              <MI type="time" value={form.starts_at}
+                onChange={(e) => setForm((p) => ({ ...p, starts_at: e.target.value }))} />
+            </div>
+            <div>
+              <FL>Fin *</FL>
+              <MI type="time" value={form.ends_at}
+                onChange={(e) => setForm((p) => ({ ...p, ends_at: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* Salle */}
+          <div>
+            <FL>Salle</FL>
+            <MI placeholder="ex : Salle 12, Labo B…"
+              value={form.room || ""}
+              onChange={(e) => setForm((p) => ({ ...p, room: e.target.value }))} />
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          display:"flex", justifyContent:"flex-end", gap:10,
+          padding:"14px 20px", borderTop:`1px solid ${T.divider}`, flexShrink:0,
+        }}>
+          <button onClick={onClose}
+            style={{ padding:"9px 18px", borderRadius:10, border:`1.5px solid ${T.cardBorder}`,
+              background:"transparent", cursor:"pointer", fontSize:12, fontWeight:700, color:T.textSecondary }}
+            onMouseEnter={(e) => (e.currentTarget.style.background=T.rowHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background="transparent")}>
+            Annuler
+          </button>
+          <button onClick={onSubmit} disabled={saving}
+            style={{
+              display:"flex", alignItems:"center", gap:8,
+              padding:"9px 22px", borderRadius:10, border:"none", cursor:"pointer",
+              fontSize:12, fontWeight:800, color:"#fff",
+              background: saving ? T.textMuted : `linear-gradient(135deg,${COL.from},${COL.to})`,
+              boxShadow: saving ? "none" : `0 4px 14px ${COL.shadow}`,
+            }}>
+            {saving
+              ? <FaSyncAlt style={{ width:12,height:12 }} className="animate-spin" />
+              : <FaCheck   style={{ width:12,height:12 }} />}
+            {saving ? "Enregistrement…" : form.id ? "Sauvegarder" : "Créer le cours"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   PAGE PRINCIPALE (inner)
+────────────────────────────────────────────────────────────────── */
+const TimetableInner = () => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+
+  /* ── State ── */
+  const [classes,      setClasses]      = useState([]);
+  const [subjects,     setSubjects]     = useState([]);
+  const [teachers,     setTeachers]     = useState([]);
+  const [timeSlots,    setTimeSlots]    = useState([]);
+  const [entriesMap,   setEntriesMap]   = useState({});   // { [classId]: Entry[] }
+  const [selectedCls,  setSelectedCls]  = useState([]);   // classId[]
+  const [loading,      setLoading]      = useState(true);
+  const [savingModal,  setSavingModal]  = useState(false);
+  const [showModal,    setShowModal]    = useState(false);
+  const [form,         setForm]         = useState(null);
+  const [searchText,   setSearchText]   = useState("");
+  const [msg,          setMsg]          = useState(null);
+
+  /* ── Refs pour éviter les race conditions sur le cache ── */
+  const fetchingRef = useRef(new Set());   // classIds en cours de fetch
+  const cachedRef   = useRef(new Set());   // classIds déjà cachés
+  const pdfRef      = useRef(null);
+
+  /* ── Color map : classId → gradient pair ── */
+  const classGradient = useCallback((classId) => {
+    const idx = classes.findIndex((c) => c.id === classId);
+    return CLASS_GRADIENTS[(idx >= 0 ? idx : classId) % CLASS_GRADIENTS.length];
   }, [classes]);
 
-  const visibleClassIds = useMemo(() => {
-    const present = new Set();
-    displayedEntries.forEach(e => present.add(e.school_class));
-    const order = selectedClasses.length ? selectedClasses : classes.map(c => c.id);
-    return order.filter(id => present.has(id));
-  }, [displayedEntries, selectedClasses, classes]);
+  /* ── Fetch initial (classes, subjects, teachers, time-slots) ── */
+  const fetchInitial = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [cls, sub, tea, slots] = await Promise.all([
+        fetchData("/academics/school-classes/").catch(() => []),
+        fetchData("/academics/subjects/").catch(() => []),
+        fetchData("/core/admin/teachers/?no_pagination=1").catch(() => []),
+        fetchData("/academics/time-slots/").catch(() => []),
+      ]);
+      setClasses(Array.isArray(cls) ? cls : (cls?.results ?? []));
+      setSubjects(Array.isArray(sub) ? sub : (sub?.results ?? []));
+      setTeachers(Array.isArray(tea) ? tea : (tea?.results ?? []));
+      const sorted = (Array.isArray(slots) ? slots : (slots?.results ?? []))
+        .slice()
+        .sort((a, b) => (a.day - b.day) || timeToMin(a.start_time) - timeToMin(b.start_time));
+      setTimeSlots(sorted);
+    } catch { setMsg({ type:"error", text:"Erreur de chargement initial." }); }
+    finally { setLoading(false); }
+  }, []);
 
-  // Toggle selection: when adding a class, fetch its entries if not cached
-  const handleClassToggle = (id) => {
-    setSelectedClasses(prev => {
-      if (prev.includes(id)) {
-        // deselect : keep cached data but remove from selected list
-        return prev.filter(p => p !== id);
-      }
-      // select : add (limit to 3)
-      const next = prev.length >= 3 ? [...prev.slice(1, 3), id] : [...prev, id];
-      // fetch the entries for the newly added class if not present
-      // do it after state update (but we can call fetch here)
-      // We call fetchClassEntries regardless; inside it will avoid double fetch if cached
+  useEffect(() => { fetchInitial(); }, [fetchInitial]);
+
+  /* ── Fetch entries pour une classe (avec cache via refs) ── */
+  const fetchClassEntries = useCallback(async (classId, force = false) => {
+    if (!classId) return;
+    if (fetchingRef.current.has(classId)) return;    // déjà en cours
+    if (!force && cachedRef.current.has(classId)) return; // déjà en cache
+
+    fetchingRef.current.add(classId);
+    try {
+      const data = await fetchData(`/academics/timetable/?school_class=${classId}`);
+      const entries = Array.isArray(data) ? data : (data?.results ?? []);
+      setEntriesMap((prev) => ({ ...prev, [classId]: entries }));
+      cachedRef.current.add(classId);
+    } catch { setMsg({ type:"error", text:"Erreur de chargement de l'emploi du temps." }); }
+    finally { fetchingRef.current.delete(classId); }
+  }, []);
+
+  /* ── Rafraîchit les classes sélectionnées (force re-fetch) ── */
+  const refreshSelected = useCallback(async () => {
+    const ids = [...selectedCls];
+    if (!ids.length) return;
+    // Invalider le cache pour ces classes
+    ids.forEach((id) => cachedRef.current.delete(id));
+    await Promise.all(ids.map((id) => fetchClassEntries(id, true)));
+  }, [selectedCls, fetchClassEntries]);
+
+  /* ── Toggle classe sélectionnée (max 4) ── */
+  const toggleClass = useCallback((id) => {
+    setSelectedCls((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      const next = prev.length >= 4 ? [...prev.slice(-3), id] : [...prev, id];
       fetchClassEntries(id);
       return next;
     });
-  };
+  }, [fetchClassEntries]);
 
-  const openModal = (entry = null) => {
-    if (entry) {
-      setForm({ ...entry, starts_at: formatTime(entry.starts_at), ends_at: formatTime(entry.ends_at) });
-    } else {
-      setForm({ id: null, school_class: "", subject: "", teacher: "", weekday: "", starts_at: "", ends_at: "", room: "", notes: "" });
-    }
-    setShowModal(true);
-  };
-
-  const submitForm = async () => {
-    try {
-      if (form.id) await patchData(`/academics/timetable/${form.id}/`, form);
-      else await postData(`/academics/timetable/`, form);
-      // refresh selected classes (ensures updated entries)
-      await refreshSelectedClasses();
-      setShowModal(false);
-    } catch (err) { 
-      console.error(err);
-      alert("Erreur d'enregistrement"); 
-    }
-  };
-
-  const deleteEntry = async (id) => {
-    if (!confirm("Supprimer ?")) return;
-    try {
-      await deleteData(`/academics/timetable/${id}/`);
-      // refresh selected classes to reflect deletion
-      await refreshSelectedClasses();
-    } catch (err) { 
-      console.error(err);
-      alert("Erreur suppression"); 
-    }
-  };
-
-  const exportPDF = async () => {
-    const element = pdfRef.current;
-    const canvas = await html2canvas(element, { scale: 2 });
-    const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF("l", "mm", "a4");
-    pdf.addImage(imgData, "PNG", 10, 10, 277, (277 * canvas.height) / canvas.width);
-    pdf.save("timetable.pdf");
-  };
-
-  const renderCell = (day, timeLabel) => {
-    const cellEntries = grid[day]?.[timeLabel] || [];
-    if (!cellEntries.length) return <div className="text-gray-300 text-[10px] italic">Vide</div>;
-
-    const grouped = {};
-    cellEntries.forEach(e => {
-      grouped[e.school_class] = grouped[e.school_class] || [];
-      grouped[e.school_class].push(e);
+  /* ── Computed: entrées combinées des classes sélectionnées ── */
+  const combinedEntries = useMemo(() => {
+    let arr = [];
+    selectedCls.forEach((id) => {
+      const list = entriesMap[id];
+      if (Array.isArray(list)) arr = arr.concat(list);
     });
+    return arr;
+  }, [entriesMap, selectedCls]);
 
-    const displayOrder = selectedClasses.length ? selectedClasses.filter(id => grouped[id]) : Object.keys(grouped).map(Number);
-
-    return (
-      <div className="flex flex-col gap-1">
-        {displayOrder.map(clsId => {
-          const e = grouped[clsId][0];
-          const color = classColorMap[clsId] || CLASS_COLORS[0];
-          return (
-            <div key={clsId} className="p-1 rounded border bg-white shadow-sm relative group">
-              <div className={`${color.bg} ${color.text} text-[9px] font-bold px-1 rounded truncate`}>{e.subject_name}</div>
-              <div className="text-[9px] text-gray-600 truncate">{e.teacher_name}</div>
-              <div className="text-[8px] text-gray-400">{e.room}</div>
-              <div className="hidden group-hover:flex absolute right-0 top-0 gap-1 bg-white p-1">
-                <button onClick={() => openModal(e)} className="text-blue-500"><FaEdit size={10}/></button>
-                <button onClick={() => deleteEntry(e.id)} className="text-red-500"><FaTrash size={10}/></button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+  /* ── Filtrage par recherche ── */
+  const displayedEntries = useMemo(() => {
+    if (!searchText.trim()) return combinedEntries;
+    const q = searchText.toLowerCase();
+    return combinedEntries.filter((e) =>
+      `${e.subject_name || ""} ${e.teacher_name || ""} ${e.school_class_name || ""} ${e.room || ""}`
+        .toLowerCase().includes(q)
     );
-  };
+  }, [combinedEntries, searchText]);
 
-  // --- FIX: colonne jour à largeur fixe pour éviter l'étirement horizontal ---
-  const dayColWidth = 140; // largeur fixe par jour en px (ne dépend plus du nombre de classes sélectionnées)
-  const totalMinWidth = 100 + weekdays.length * dayColWidth;
-  const columnsStyleString = ['100px', ...Array(weekdays.length).fill(`${dayColWidth}px`)].join(' ');
-
-  return (
-    <div className="p-6 bg-gray-50 min-h-screen font-sans">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">Gestion des Emplois du Temps</h1>
-        <div className="flex gap-2">
-          <button onClick={exportPDF} className="bg-rose-600 text-white px-4 py-2 rounded-full flex items-center gap-2"><FaFilePdf/> PDF</button>
-          <button onClick={() => openModal(null)} className="bg-emerald-600 text-white px-4 py-2 rounded-full flex items-center gap-2"><FaPlus/> Ajouter</button>
-        </div>
-      </div>
-
-      <div className="bg-white p-4 rounded-xl shadow-sm mb-6">
-        <div className="flex flex-wrap gap-4 items-center">
-          <span className="text-sm font-semibold">Classes :</span>
-          {classes.map(c => (
-            <button
-              key={c.id}
-              onClick={() => handleClassToggle(c.id)}
-              className={`px-3 py-1 rounded-full text-xs border transition ${selectedClasses.includes(c.id) ? "bg-slate-800 text-white" : "bg-white text-gray-600"}`}
-            >
-              {c.name}
-              {/* show small spinner if this class is being fetched */}
-              {fetchingClassIds.has(c.id) && <span className="ml-2 text-xs">⏳</span>}
-            </button>
-          ))}
-          <input type="text" placeholder="Recherche..." className="border p-2 rounded-lg text-sm ml-auto" value={searchText} onChange={(e) => setSearchText(e.target.value)} />
-        </div>
-        <div className="mt-2 text-xs text-gray-500">
-          {selectedClasses.length === 0 ? "Sélectionne une ou plusieurs classes pour charger leur emploi du temps." : `${selectedClasses.length} classe(s) sélectionnée(s)` }
-        </div>
-      </div>
-
-      <div ref={pdfRef} className="bg-white rounded-xl shadow-sm overflow-x-auto p-4">
-        {loading ? <p>Chargement...</p> : (
-          <div style={{ minWidth: totalMinWidth }}>
-            <div className="grid border-b bg-gray-50" style={{ gridTemplateColumns: columnsStyleString }}>
-              <div className="p-3 text-sm font-bold">Heure</div>
-              {weekdays.map(d => <div key={d.value} className="p-3 text-sm font-bold text-center border-l">{d.label}</div>)}
-            </div>
-            {timeLabels.map((tl, idx) => (
-              <div key={idx} className="grid border-b min-h-[80px]" style={{ gridTemplateColumns: columnsStyleString }}>
-                <div className="p-2 text-[11px] font-medium bg-gray-50 flex items-center justify-center">{tl}</div>
-                {weekdays.map(d => (
-                  <div key={d.value} className="p-1 border-l">
-                    {renderCell(d.value, tl)}
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="mt-6 flex flex-wrap gap-4 bg-white p-4 rounded-xl shadow-sm">
-        <span className="text-sm font-bold">Légende :</span>
-        {visibleClassIds.map(id => {
-          const cls = classes.find(c => c.id === id);
-          const color = classColorMap[id];
-          return (
-            <div key={id} className="flex items-center gap-2 text-xs">
-              <span className={`w-4 h-4 rounded ${color?.swatch}`}></span>
-              <span>{cls?.name}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {showModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-2xl w-[500px]">
-            <h2 className="text-xl font-bold mb-4">{form.id ? "Modifier" : "Ajouter"} un cours</h2>
-            <div className="grid gap-3">
-              <select className="border p-2 rounded" value={form.school_class} onChange={e => setForm({...form, school_class: e.target.value})}>
-                <option value="">Classe</option>
-                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-              <input type="text" placeholder="Matière" className="border p-2 rounded" value={form.subject_name || form.subject} onChange={e => setForm({...form, subject: e.target.value})} />
-              <input type="text" placeholder="Enseignant" className="border p-2 rounded" value={form.teacher_name || form.teacher} onChange={e => setForm({...form, teacher: e.target.value})} />
-              <div className="flex gap-2">
-                <input type="time" className="border p-2 rounded flex-1" value={form.starts_at} onChange={e => setForm({...form, starts_at: e.target.value})} />
-                <input type="time" className="border p-2 rounded flex-1" value={form.ends_at} onChange={e => setForm({...form, ends_at: e.target.value})} />
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <button onClick={() => setShowModal(false)} className="px-4 py-2 text-gray-500">Annuler</button>
-              <button onClick={submitForm} className="px-6 py-2 bg-emerald-600 text-white rounded-lg">Enregistrer</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/*// Timetable.jsx
-import React, { useEffect, useMemo, useState, useRef } from "react";
-import axios from "axios";
-import { FaEdit, FaTrash, FaPlus, FaFilter, FaPrint, FaFilePdf, FaClock, FaMapMarkerAlt } from "react-icons/fa";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
-
-/*
-  NOTE:
-  - Ce fichier reprend ton code original et ajoute :
-    -> Pan (drag) dans toutes les directions
-    -> Zoom (boutons + Ctrl+molette) + Reset
-    -> Touch support (drag)
-  - La logique existante (fetch, grid, renderCell, PDF export, modal...) est conservée.
-  - La largeur d'une colonne jour est toujours : initialSingleDayWidth * clampedCount (1..3).
-*/
-/*
-const weekdays = [
-  { value: 1, label: "Lundi" },
-  { value: 2, label: "Mardi" },
-  { value: 3, label: "Mercredi" },
-  { value: 4, label: "Jeudi" },
-  { value: 5, label: "Vendredi" },
-  { value: 6, label: "Samedi" },
-];
-
-const CLASS_COLORS = [
-  { bg: "bg-slate-700", text: "text-white", swatch: "bg-slate-700" },
-  { bg: "bg-emerald-700", text: "text-white", swatch: "bg-emerald-700" },
-  { bg: "bg-indigo-700", text: "text-white", swatch: "bg-indigo-700" },
-];
-
-function timeToMinutes(t) {
-  if (!t) return 0;
-  const [h, m] = String(t).split(":").map(Number);
-  return h * 60 + (m || 0);
-}
-
-export default function Timetable() {
-  const token = localStorage.getItem("access_token");
-  const API_BASE = "http://localhost:8000/api";
-
-  // data
-  const [entries, setEntries] = useState([]);
-  const [classes, setClasses] = useState([]);
-  const [timeSlots, setTimeSlots] = useState([]);
-
-  // ui
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [selectedClasses, setSelectedClasses] = useState([]); // array of class ids in display order
-  const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState(null);
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [searchText, setSearchText] = useState("");
-  const [filterTeacher, setFilterTeacher] = useState("");
-  const [filterSubject, setFilterSubject] = useState("");
-  const [filterRoom, setFilterRoom] = useState("");
-  const [filterDay, setFilterDay] = useState("");
-
-  // pan/zoom
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const panStart = useRef({ x: 0, y: 0 });
-  const lastOffset = useRef({ x: 0, y: 0 });
-  const canvasRef = useRef(null);   // element that is translated & scaled
-  const wrapperRef = useRef(null);  // visible area wrapper (for wheel events)
-
-  const pdfRef = useRef(null); // kept for pdf export (wraps wrapper)
-
-  // fetch
-  const fetchAll = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const [entriesRes, classesRes, slotsRes] = await Promise.all([
-        axios.get(`${API_BASE}/academics/timetable/`, { headers: { Authorization: `Bearer ${token}` } }),
-        axios.get(`${API_BASE}/academics/school-classes/`, { headers: { Authorization: `Bearer ${token}` } }),
-        axios.get(`${API_BASE}/academics/time-slots/`, { headers: { Authorization: `Bearer ${token}` } }),
-      ]);
-      const entriesData = entriesRes.data || [];
-      const classesData = classesRes.data || [];
-      const slotsData = (slotsRes.data || []).slice().sort((a,b) => (a.day - b.day) || (String(a.start_time).localeCompare(String(b.start_time))));
-      setEntries(entriesData);
-      setClasses(classesData);
-      setTimeSlots(slotsData);
-      if (classesData.length && selectedClasses.length === 0) {
-        setSelectedClasses([classesData[0].id]);
-      } else {
-        setSelectedClasses(prev => prev.filter(id => classesData.some(c => c.id === id)));
-      }
-    } catch (err) {
-      console.error(err);
-      setError("Erreur lors du chargement des données. Vérifie l'API / token.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { fetchAll(); /* eslint-disable-next-line  }, []);
-
+  /* ── Time labels depuis time-slots (pour les lignes de la grille) ── */
   const timeLabels = useMemo(() => {
-    const map = new Map();
-    timeSlots.forEach(s => {
-      const label = `${s.start_time} - ${s.end_time}`;
-      if (!map.has(label)) map.set(label, { start: s.start_time });
+    const seen = new Set();
+    const arr = [];
+    timeSlots.forEach((s) => {
+      const lbl = `${fmtTime(s.start_time)} – ${fmtTime(s.end_time)}`;
+      if (!seen.has(lbl)) { seen.add(lbl); arr.push({ lbl, start: s.start_time }); }
     });
-    return Array.from(map.entries())
-      .map(([label, v]) => ({ label, start: v.start }))
-      .sort((a,b) => timeToMinutes(a.start) - timeToMinutes(b.start))
-      .map(x => x.label);
+    return arr
+      .sort((a, b) => timeToMin(a.start) - timeToMin(b.start))
+      .map((x) => x.lbl);
   }, [timeSlots]);
 
-  const displayedEntries = useMemo(() => {
-    const selected = selectedClasses.length ? selectedClasses : classes.map(c => c.id);
-    return entries.filter(e => {
-      if (!selected.includes(e.school_class)) return false;
-      if (searchText) {
-        const q = searchText.toLowerCase();
-        const any = `${e.subject_name || e.subject || ""} ${e.teacher_name || e.teacher || ""} ${e.school_class_name || ""}`;
-        if (!any.toLowerCase().includes(q)) return false;
-      }
-      if (filterTeacher && String(e.teacher_name || e.teacher) !== String(filterTeacher)) return false;
-      if (filterSubject && String(e.subject_name || e.subject) !== String(filterSubject)) return false;
-      if (filterRoom && String(e.room || "") !== String(filterRoom)) return false;
-      if (filterDay && String(e.weekday) !== String(filterDay)) return false;
-      return true;
-    });
-  }, [entries, selectedClasses, searchText, filterTeacher, filterSubject, filterRoom, filterDay, classes]);
-
+  /* ── Grille : grid[weekday][timeLabel] = Entry[] ── */
   const grid = useMemo(() => {
     const g = {};
-    weekdays.forEach(d => {
-      g[d.value] = {};
-      timeLabels.forEach(t => (g[d.value][t] = []));
+    WEEKDAYS.forEach((d) => {
+      g[d.v] = {};
+      timeLabels.forEach((tl) => (g[d.v][tl] = []));
     });
-    displayedEntries.forEach(e => {
-      const timeLabel = `${e.starts_at} - ${e.ends_at}`;
-      if (!g[e.weekday]) g[e.weekday] = {};
-      if (!g[e.weekday][timeLabel]) g[e.weekday][timeLabel] = [];
-      g[e.weekday][timeLabel].push(e);
+    displayedEntries.forEach((e) => {
+      const lbl = `${fmtTime(e.starts_at)} – ${fmtTime(e.ends_at)}`;
+      const wd = parseInt(e.weekday);
+      if (g[wd] && g[wd][lbl] !== undefined) g[wd][lbl].push(e);
     });
     return g;
   }, [displayedEntries, timeLabels]);
 
-  const classColorMap = useMemo(() => {
-    const map = {};
-    const order = selectedClasses.length ? selectedClasses : classes.map(c => c.id);
-    order.forEach((clsId, idx) => {
-      map[clsId] = CLASS_COLORS[idx % CLASS_COLORS.length];
-    });
-    classes.forEach((c, idx) => {
-      if (!map[c.id]) map[c.id] = CLASS_COLORS[(selectedClasses.length + idx) % CLASS_COLORS.length];
-    });
-    return map;
-  }, [selectedClasses, classes]);
+  /* ── Classes visibles dans la légende ── */
+  const legendClasses = useMemo(() => {
+    const present = new Set(displayedEntries.map((e) => e.school_class));
+    return selectedCls
+      .filter((id) => present.has(id))
+      .map((id) => classes.find((c) => c.id === id))
+      .filter(Boolean);
+  }, [displayedEntries, selectedCls, classes]);
 
-  const handleClassToggle = (id) => {
-    setSelectedClasses(prev => {
-      if (prev.includes(id)) return prev.filter(p => p !== id);
-      if (prev.length >= 3) return [...prev.slice(0,2), id];
-      return [...prev, id];
-    });
-  };
-
-  const openModal = (entry = null) => {
-    if (entry) {
-      setForm({
-        id: entry.id,
-        school_class: entry.school_class,
-        subject: entry.subject,
-        teacher: entry.teacher || entry.teacher_id || "",
-        weekday: entry.weekday,
-        starts_at: entry.starts_at,
-        ends_at: entry.ends_at,
-        room: entry.room || "",
-        notes: entry.notes || ""
-      });
-    } else {
-      setForm({ id: null, school_class: "", subject: "", teacher: "", weekday: "", starts_at: "", ends_at: "", room: "", notes: "" });
-    }
+  /* ── Handlers ── */
+  const openAdd = () => {
+    setForm({ id:null, school_class:"", subject:"", teacher:"", weekday:"", starts_at:"", ends_at:"", room:"" });
     setShowModal(true);
   };
-  const closeModal = () => { setShowModal(false); setForm(null); };
+
+  const openEdit = (entry) => {
+    setForm({
+      id:           entry.id,
+      school_class: entry.school_class,
+      subject:      entry.subject,
+      teacher:      entry.teacher || "",
+      weekday:      entry.weekday,
+      starts_at:    fmtTime(entry.starts_at),
+      ends_at:      fmtTime(entry.ends_at),
+      room:         entry.room || "",
+    });
+    setShowModal(true);
+  };
 
   const submitForm = async () => {
-    if (!form) return;
-    const payload = {
-      school_class: form.school_class,
-      subject: form.subject,
-      teacher: form.teacher || null,
-      weekday: form.weekday,
-      starts_at: form.starts_at,
-      ends_at: form.ends_at,
-      room: form.room,
-      notes: form.notes,
-    };
-    try {
-      if (form.id) {
-        await axios.put(`${API_BASE}/academics/timetable/${form.id}/`, payload, { headers: { Authorization: `Bearer ${token}` } });
-      } else {
-        await axios.post(`${API_BASE}/academics/timetable/`, payload, { headers: { Authorization: `Bearer ${token}` } });
-      }
-      await fetchAll();
-      closeModal();
-    } catch (err) {
-      console.error(err);
-      alert("Erreur lors de l'enregistrement");
+    const { id, ...payload } = form;
+    // Validation minimale
+    if (!payload.school_class || !payload.subject || !payload.weekday || !payload.starts_at || !payload.ends_at) {
+      setMsg({ type:"error", text:"Veuillez remplir tous les champs obligatoires (*)." });
+      return;
     }
+    setSavingModal(true);
+    try {
+      if (id) await patchData(`/academics/timetable/${id}/`, payload);
+      else    await postData("/academics/timetable/", payload);
+      setMsg({ type:"success", text: id ? "Cours mis à jour." : "Cours ajouté." });
+      setShowModal(false);
+      await refreshSelected();
+    } catch { setMsg({ type:"error", text:"Erreur lors de l'enregistrement." }); }
+    finally { setSavingModal(false); }
   };
 
   const deleteEntry = async (id) => {
-    if (!confirm("Supprimer cette entrée ?")) return;
+    if (!window.confirm("Supprimer ce cours de l'emploi du temps ?")) return;
     try {
-      await axios.delete(`${API_BASE}/academics/timetable/${id}/`, { headers: { Authorization: `Bearer ${token}` } });
-      await fetchAll();
-    } catch (err) {
-      console.error(err);
-      alert("Erreur lors de la suppression");
-    }
+      await deleteData(`/academics/timetable/${id}/`);
+      setMsg({ type:"success", text:"Cours supprimé." });
+      await refreshSelected();
+    } catch { setMsg({ type:"error", text:"Erreur lors de la suppression." }); }
   };
 
   const exportPDF = async () => {
-    // capture wrapper (pdfRef) which contains the visible canvas - transforms are captured by html2canvas
     if (!pdfRef.current) return;
-    const element = pdfRef.current;
-    const originalBg = element.style.backgroundColor;
-    element.style.backgroundColor = "#ffffff";
-    const canvas = await html2canvas(element, { scale: 2, useCORS: true, allowTaint: true });
-    const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF("l", "mm", "a4");
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgProps = pdf.getImageProperties(imgData);
-    const imgRatio = imgProps.width / imgProps.height;
-    const imgWidth = pageWidth - 20;
-    const imgHeight = imgWidth / imgRatio;
-    pdf.addImage(imgData, "PNG", 10, 10, imgWidth, imgHeight);
-    if (imgHeight > pageHeight - 20) {
-      let remaining = imgHeight - (pageHeight - 20);
-      let offsetPdf = pageHeight - 20;
-      while (remaining > 0) {
-        pdf.addPage();
-        pdf.addImage(imgData, "PNG", 10, -offsetPdf + 10, imgWidth, imgHeight);
-        offsetPdf += pageHeight - 20;
-        remaining -= pageHeight - 20;
-      }
-    }
-    pdf.save("emplois_du_temps.pdf");
-    element.style.backgroundColor = originalBg;
+    try {
+      const canvas = await html2canvas(pdfRef.current, { scale: 2, useCORS: true });
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF("l", "mm", "a4");
+      const w = 277, h = (w * canvas.height) / canvas.width;
+      pdf.addImage(imgData, "PNG", 10, 10, w, Math.min(h, 190));
+      pdf.save("emploi-du-temps.pdf");
+      setMsg({ type:"success", text:"PDF exporté avec succès." });
+    } catch { setMsg({ type:"error", text:"Erreur lors de l'export PDF." }); }
   };
 
-  const handlePrint = () => window.print();
-
-  const teachers = useMemo(() => {
-    const s = new Set();
-    entries.forEach(e => { if (e.teacher_name) s.add(e.teacher_name); else if (e.teacher) s.add(e.teacher); });
-    return Array.from(s);
-  }, [entries]);
-  const subjects = useMemo(() => {
-    const s = new Set();
-    entries.forEach(e => { if (e.subject_name) s.add(e.subject_name); else if (e.subject) s.add(e.subject); });
-    return Array.from(s);
-  }, [entries]);
-  const rooms = useMemo(() => {
-    const s = new Set();
-    entries.forEach(e => { if (e.room) s.add(e.room); });
-    return Array.from(s);
-  }, [entries]);
-
-  const renderCell = (day, timeLabel) => {
-    const cellEntries = (grid[day] && grid[day][timeLabel]) ? grid[day][timeLabel] : [];
-    if (!cellEntries.length) return <div className="text-xs text-gray-400 italic">—</div>;
-
-    const grouped = {};
-    cellEntries.forEach(e => {
-      grouped[e.school_class] = grouped[e.school_class] || [];
-      grouped[e.school_class].push(e);
+  /* ── Rendu d'une cellule ── */
+  const renderCell = (day, tl) => {
+    const entries = grid[day]?.[tl] ?? [];
+    if (!entries.length) {
+      return (
+        <div style={{
+          display:"flex", alignItems:"center", justifyContent:"center",
+          height:"100%", minHeight:60,
+        }}>
+          <div style={{ width:18, height:1, background:T.divider, borderRadius:2 }} />
+        </div>
+      );
+    }
+    // Groupe par classe (au cas où plusieurs classes partagent le même créneau)
+    const byClass = {};
+    entries.forEach((e) => {
+      if (!byClass[e.school_class]) byClass[e.school_class] = [];
+      byClass[e.school_class].push(e);
     });
-
-    const displayOrder = (selectedClasses.length ? selectedClasses : classes.map(c => c.id)).filter(id => grouped[id]).concat(
-      Object.keys(grouped).map(k => parseInt(k,10)).filter(id => !(selectedClasses.length ? selectedClasses : classes.map(c => c.id)).includes(id))
-    );
-
-    const sideBySide = displayOrder.length <= 3;
-
+    const orderedIds = selectedCls.filter((id) => byClass[id]);
     return (
-      <div className={`${sideBySide ? "flex flex-nowrap gap-2" : "flex flex-col gap-2"}`}>
-        {displayOrder.map((clsId, idx) => {
-          const arr = grouped[clsId] || [];
-          const e = arr[0];
-          const color = classColorMap[clsId] || CLASS_COLORS[idx % CLASS_COLORS.length];
+      <div style={{ display:"flex", flexDirection:"column", gap:4, padding:"4px 2px" }}>
+        {orderedIds.map((cid) => {
+          const e = byClass[cid][0];
           return (
-            <div
-              key={`${clsId}-${idx}`}
-              className={`${sideBySide ? "flex-1 min-w-0" : ""} rounded border p-2 bg-white hover:shadow-sm transition`}
-              style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: 64 }}
-            >
-              <div>
-                <div className={`px-2 py-1 rounded text-sm font-semibold ${color.bg} ${color.text} truncate`}>
-                  {e.subject_name || e.subject || "—"}
-                </div>
-                <div className="text-[12px] text-gray-600 mt-1 truncate">
-                  <strong>{e.teacher_name || e.teacher || "—"}</strong>
-                </div>
-                <div className="text-[11px] text-gray-500 mt-1 truncate flex items-center gap-2">
-                  <FaClock className="text-[10px]" /> {e.starts_at} — {e.ends_at}
-                </div>
-                {e.room && <div className="text-[11px] text-gray-700 mt-1 truncate flex items-center gap-2"><FaMapMarkerAlt className="text-[10px]" /> {e.room}</div>}
-                {arr.length > 1 && <div className="text-xs text-gray-400 mt-1">+{arr.length - 1} autre(s)</div>}
-              </div>
-
-              <div className="mt-2 flex gap-2 justify-end">
-                <button onClick={() => openModal(e)} className="text-sm px-2 py-1 border rounded hover:bg-gray-50"><FaEdit/></button>
-                <button onClick={() => deleteEntry(e.id)} className="text-sm px-2 py-1 border rounded hover:bg-red-50 text-red-600"><FaTrash/></button>
-              </div>
-            </div>
+            <EntryChip
+              key={cid}
+              entry={e}
+              gradient={classGradient(cid)}
+              onEdit={openEdit}
+              onDelete={deleteEntry}
+            />
           );
         })}
       </div>
     );
   };
 
-  // === MODIFICATION : garder la largeur initiale d'une colonne pour 1 emploi et multiplier ===
-  const initialSingleDayWidth = 100; // px pour 1 emploi ; multiplié par 1..3
-  const visibleCount = selectedClasses.length ? selectedClasses.length : 1;
-  const clampedCount = Math.min(Math.max(visibleCount, 1), 3); // 1..3
-  const dayColWidth = initialSingleDayWidth * clampedCount; // 1x, 2x, 3x
-  const gridCols = `160px repeat(6, ${dayColWidth}px)`; // left time column fixed 160px, 6 day columns fixed
-  const containerMinWidth = 160 + 6 * dayColWidth;
-  // ========================================================================================
+  /* ── Dimensions grille ── */
+  const TIME_COL = 88;
+  const DAY_COL  = 148;
+  const gridCols = `${TIME_COL}px repeat(6, ${DAY_COL}px)`;
+  const gridMinW = TIME_COL + 6 * DAY_COL;
 
-  /* ---------------- Pan & Zoom logic: event handlers + effects ---------------- 
-
-  // Mouse-based pan (mousedown on canvas -> move -> mouseup)
-  useEffect(() => {
-    const el = canvasRef.current;
-    if (!el) return;
-
-    const onMouseDown = (e) => {
-      // only left button
-      if (e.button !== 0) return;
-      setIsPanning(true);
-      panStart.current = { x: e.clientX, y: e.clientY };
-      el.style.cursor = "grabbing";
-      // prevent selecting text while dragging
-      document.body.style.userSelect = "none";
-      document.body.style.pointerEvents = "none";
-    };
-
-    const onMouseMove = (e) => {
-      if (!isPanning) return;
-      const dx = e.clientX - panStart.current.x;
-      const dy = e.clientY - panStart.current.y;
-      const newOffset = { x: lastOffset.current.x + dx, y: lastOffset.current.y + dy };
-      // update offset directly (no debouncing required)
-      setOffset(newOffset);
-    };
-
-    const onMouseUp = () => {
-      if (!isPanning) return;
-      setIsPanning(false);
-      lastOffset.current = { ...offset };
-      if (el) el.style.cursor = "grab";
-      document.body.style.userSelect = "";
-      document.body.style.pointerEvents = "";
-    };
-
-    el.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-
-    return () => {
-      el.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      document.body.style.userSelect = "";
-      document.body.style.pointerEvents = "";
-    };
-    // include isPanning & offset in deps so mouseup captures latest offset
-  }, [isPanning, offset]);
-
-  // Touch support (touchdrag)
-  useEffect(() => {
-    const el = canvasRef.current;
-    if (!el) return;
-
-    const onTouchStart = (e) => {
-      if (!e.touches || e.touches.length === 0) return;
-      setIsPanning(true);
-      const t = e.touches[0];
-      panStart.current = { x: t.clientX, y: t.clientY };
-      document.body.style.userSelect = "none";
-    };
-
-    const onTouchMove = (e) => {
-      if (!isPanning) return;
-      if (!e.touches || e.touches.length === 0) return;
-      const t = e.touches[0];
-      const dx = t.clientX - panStart.current.x;
-      const dy = t.clientY - panStart.current.y;
-      const newOffset = { x: lastOffset.current.x + dx, y: lastOffset.current.y + dy };
-      setOffset(newOffset);
-    };
-
-    const onTouchEnd = () => {
-      if (!isPanning) return;
-      setIsPanning(false);
-      lastOffset.current = { ...offset };
-      document.body.style.userSelect = "";
-    };
-
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    window.addEventListener("touchmove", onTouchMove, { passive: false });
-    window.addEventListener("touchend", onTouchEnd);
-
-    return () => {
-      el.removeEventListener("touchstart", onTouchStart);
-      window.removeEventListener("touchmove", onTouchMove);
-      window.removeEventListener("touchend", onTouchEnd);
-      document.body.style.userSelect = "";
-    };
-  }, [isPanning, offset]);
-
-  // Update lastOffset whenever offset changes (so mouseup stores correct value)
-  useEffect(() => {
-    // don't overwrite lastOffset while panning; keep source of truth in lastOffset when pan ends
-    if (!isPanning) {
-      lastOffset.current = { ...offset };
-    }
-  }, [offset, isPanning]);
-
-  // Wheel zoom (Ctrl + wheel) on wrapperRef - prevents default when ctrl pressed
-  useEffect(() => {
-    const wrapper = wrapperRef.current;
-    if (!wrapper) return;
-
-    const onWheel = (e) => {
-      // Ctrl + wheel -> zoom
-      if (e.ctrlKey) {
-        e.preventDefault();
-        // deltaY positive = zoom out
-        setZoomLevel(z => {
-          const next = z - e.deltaY * 0.0015;
-          return Math.min(2.5, Math.max(0.5, next));
-        });
-      } else {
-        // not ctrl: allow default (could scroll page) or we can pan vertically by wheel if desired
-        // we leave default to allow page scroll
-      }
-    };
-
-    wrapper.addEventListener("wheel", onWheel, { passive: false });
-    return () => wrapper.removeEventListener("wheel", onWheel);
-  }, []);
-
-  // Zoom controls
-  const handleZoomIn = () => setZoomLevel(z => Math.min(2.5, parseFloat((z + 0.1).toFixed(2))));
-  const handleZoomOut = () => setZoomLevel(z => Math.max(0.5, parseFloat((z - 0.1).toFixed(2))));
-  const resetView = () => {
-    setZoomLevel(1);
-    setOffset({ x: 0, y: 0 });
-    lastOffset.current = { x: 0, y: 0 };
-  };
-
-  // Double click on wrapper to reset (handy)
-  useEffect(() => {
-    const wrap = wrapperRef.current;
-    if (!wrap) return;
-    const onDbl = (e) => {
-      e.preventDefault();
-      resetView();
-    };
-    wrap.addEventListener("dblclick", onDbl);
-    return () => wrap.removeEventListener("dblclick", onDbl);
-  }, []);
-
-  /* ---------------- End Pan & Zoom logic ---------------- */
-
-  /* ---------- Render ---------- 
+  /* ══════════════════════════════════════════════════
+     RENDER
+  ══════════════════════════════════════════════════ */
   return (
-    <div className="p-6 bg-gray-50 min-h-screen">
-      {/* header }
-      <div className="flex items-start justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-3xl font-bold">Emplois du temps — Administration</h1>
-          <p className="text-sm text-gray-600 mt-1">Tableau pro • comparaison jusqu’à 3 classes • export PDF</p>
-        </div>
+    <div style={{ minHeight:"100vh", background:T.pageBg, transition:"background .3s",
+      fontFamily:"'Plus Jakarta Sans', sans-serif", paddingBottom:60 }}>
+      <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
-        <div className="flex items-center gap-2">
-          <button onClick={exportPDF} className="px-3 py-2 rounded-full bg-rose-600 text-white flex items-center gap-2"><FaFilePdf/> Export PDF</button>
-          <button onClick={handlePrint} className="px-3 py-2 rounded-full bg-white border"><FaPrint/> Imprimer</button>
-          <button onClick={() => openModal(null)} className="ml-2 bg-gradient-to-r from-green-500 to-teal-500 text-white px-4 py-2 rounded-full flex items-center gap-2"><FaPlus/> Ajouter</button>
-        </div>
-      </div>
-
-      {/* filters & class selector }
-      <div className="bg-white rounded-lg shadow p-4 mb-6">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="text-sm font-medium">Sélection classes (max 3)</div>
-            <div className="flex gap-2 flex-wrap">
-              {classes.map(c => (
-                <button
-                  key={c.id}
-                  onClick={() => handleClassToggle(c.id)}
-                  className={`px-3 py-1 rounded-full border ${selectedClasses.includes(c.id) ? "bg-slate-800 text-white" : "bg-white text-gray-700"}`}
-                >
-                  {c.name}
-                </button>
-              ))}
+      {/* ══ HEADER ══ */}
+      <header style={{
+        position:"sticky", top:0, zIndex:40,
+        background:T.headerBg, backdropFilter:"blur(16px)",
+        borderBottom:`1px solid ${T.divider}`, transition:"all .3s",
+      }}>
+        <div style={{ maxWidth:1400, margin:"0 auto", padding:"12px 24px",
+          display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
+          {/* Title */}
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <div style={{
+              width:40, height:40, borderRadius:12, flexShrink:0,
+              display:"flex", alignItems:"center", justifyContent:"center",
+              background:`linear-gradient(135deg,${COL.from},${COL.to})`,
+              boxShadow:`0 6px 18px ${COL.shadow}`,
+            }}>
+              <FaCalendarAlt style={{ width:17,height:17,color:"#fff" }} />
+            </div>
+            <div>
+              <h1 style={{ fontSize:17, fontWeight:900, color:T.textPrimary, letterSpacing:"-0.02em" }}>
+                Emplois du temps
+              </h1>
+              <p style={{ fontSize:11, color:T.textMuted, marginTop:1 }}>
+                Sélectionnez jusqu'à 4 classes pour superposer leurs grilles
+              </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <input type="text" placeholder="Recherche matière / prof / classe" value={searchText} onChange={(e)=>setSearchText(e.target.value)} className="border rounded p-2" />
-            <button onClick={()=>setFiltersOpen(prev => !prev)} className="px-3 py-2 rounded bg-white border"><FaFilter/></button>
-          </div>
-        </div>
 
-        {filtersOpen && (
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-            <select value={filterTeacher} onChange={(e)=>setFilterTeacher(e.target.value)} className="border p-2 rounded">
-              <option value="">Tous les enseignants</option>
-              {teachers.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
-            <select value={filterSubject} onChange={(e)=>setFilterSubject(e.target.value)} className="border p-2 rounded">
-              <option value="">Toutes les matières</option>
-              {subjects.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <select value={filterRoom} onChange={(e)=>setFilterRoom(e.target.value)} className="border p-2 rounded">
-              <option value="">Toutes les salles</option>
-              {rooms.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-            <select value={filterDay} onChange={(e)=>setFilterDay(e.target.value)} className="border p-2 rounded">
-              <option value="">Tous les jours</option>
-              {weekdays.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-            </select>
-          </div>
-        )}
-      </div>
+          {/* Actions */}
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <DarkToggle />
 
-      {/* wrapper that holds the transformable canvas; pdfRef wraps wrapper so export captures visible area }
-      <div ref={pdfRef} className="bg-white rounded-lg shadow p-4">
-        {loading ? (
-          <div className="text-gray-500">Chargement...</div>
-        ) : error ? (
-          <div className="text-red-500">{error}</div>
-        ) : (
-          <>
-            {/* visible wrapper - overflow hidden so we pan/zoom inside it }
-            <div
-              ref={wrapperRef}
-              className="relative overflow-hidden select-none"
-              style={{ height: "72vh" }} // adjust height if you want different viewport height
-            >
-              {/* canvas: absolutely positioned element that we translate & scale }
-              <div
-                ref={canvasRef}
-                className="absolute top-0 left-0 cursor-grab"
+            {/* Search */}
+            <div style={{ position:"relative" }}>
+              <FaSearch style={{
+                position:"absolute", left:10, top:"50%", transform:"translateY(-50%)",
+                width:11, height:11, color:T.textMuted, pointerEvents:"none",
+              }} />
+              <input
+                placeholder="Rechercher…"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
                 style={{
-                  transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoomLevel})`,
-                  transformOrigin: "top left",
-                  transition: isPanning ? "none" : "transform 0.12s ease-out",
-                  width: "max-content",
+                  paddingLeft:30, paddingRight:12, paddingTop:8, paddingBottom:8,
+                  borderRadius:10, border:`1.5px solid ${T.inputBorder}`,
+                  background:T.inputBg, color:T.textPrimary, fontSize:12,
+                  outline:"none", width:160,
                 }}
-              >
-                {/* ---------- GRID CONTENT (unchanged logic) ---------- }
-                <div style={{ minWidth: containerMinWidth }}>
-                  {/* header row: remove page-sticky because header moves with canvas (keeps it synced during pan) }
-                  <div
-                    className="grid gap-0 border-b border-gray-200 bg-white z-10"
-                    style={{ gridTemplateColumns: gridCols }}
-                  >
-                    <div className="p-2 text-sm font-medium">Heure</div>
-                    {weekdays.map(d => (
-                      <div key={d.value} className="p-2 text-center text-sm font-medium border-l border-gray-200">{d.label}</div>
-                    ))}
-                  </div>
-
-                  {/* time rows }
-                  <div>
-                    {timeLabels.map((tl, idx) => {
-                      const [start] = tl.split(" - ").map(s => s.trim());
-                      const startMinutes = timeToMinutes(start);
-                      const period = startMinutes < 12*60 ? "Matinée" : startMinutes < 17*60 ? "Après-midi" : "Soirée";
-                      const rowBg = idx % 2 === 0 ? "bg-white" : "bg-gray-50"; // zebra
-                      return (
-                        <div key={tl} className={`${rowBg} grid border-b border-gray-100`} style={{ gridTemplateColumns: gridCols }}>
-                          <div className="p-2 bg-gray-50">
-                            <div className="text-sm font-medium">{tl}</div>
-                            <div className="text-xs text-gray-500 mt-1">{period}</div>
-                          </div>
-
-                          {weekdays.map(d => (
-                            <div key={`${d.value}-${idx}`} className="p-2 border-l border-gray-100">
-                              {renderCell(d.value, tl)}
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-                {/* ---------- end grid content ---------- }
-              </div>
-
-              {/* zoom controls: bottom-right inside wrapper }
-              <div className="absolute bottom-4 right-4 bg-white border rounded-lg shadow flex gap-2 p-2">
-                <button onClick={handleZoomOut} className="px-3 py-1 rounded border">−</button>
-                <button onClick={resetView} className="px-3 py-1 rounded border">Reset</button>
-                <button onClick={handleZoomIn} className="px-3 py-1 rounded border">+</button>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* LEGEND *}
-      <div className="mt-4 bg-white p-3 rounded-lg shadow flex flex-wrap items-center gap-4">
-        <div className="text-sm font-medium">Légende :</div>
-        {(selectedClasses.length ? selectedClasses : classes.slice(0,3).map(c => c.id)).map((id, idx) => {
-          const cls = classes.find(c => c.id === id);
-          const color = classColorMap[id] || CLASS_COLORS[idx % CLASS_COLORS.length];
-          return (
-            <div key={id} className="flex items-center gap-2 text-sm">
-              <span className={`inline-block w-6 h-4 rounded ${color.swatch} border`}></span>
-              <span>{cls?.name || `Classe ${id}`}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Modal *}
-      {showModal && form && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40 p-4">
-          <div className="bg-white rounded-2xl p-6 w-[720px] max-w-full">
-            <h2 className="text-xl font-bold mb-4">{form.id ? "Modifier une entrée" : "Ajouter une entrée"}</h2>
-            <div className="grid grid-cols-2 gap-3">
-              <select value={form.school_class} onChange={(e)=>setForm({...form, school_class: e.target.value})} className="border p-2 rounded">
-                <option value="">Choisir une classe</option>
-                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-              <input placeholder="Matière (id ou nom)" value={form.subject} onChange={(e)=>setForm({...form, subject: e.target.value})} className="border p-2 rounded" />
-              <input placeholder="Prof (id ou nom)" value={form.teacher} onChange={(e)=>setForm({...form, teacher: e.target.value})} className="border p-2 rounded" />
-              <select value={form.weekday} onChange={(e)=>setForm({...form, weekday: parseInt(e.target.value || "", 10)})} className="border p-2 rounded">
-                <option value="">Jour</option>
-                {weekdays.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-              </select>
-              <select value={form.starts_at} onChange={(e)=>setForm({...form, starts_at: e.target.value})} className="border p-2 rounded">
-                <option value="">Début</option>
-                {timeSlots.map(ts => <option key={ts.id} value={ts.start_time}>{ts.start_time}</option>)}
-              </select>
-              <select value={form.ends_at} onChange={(e)=>setForm({...form, ends_at: e.target.value})} className="border p-2 rounded">
-                <option value="">Fin</option>
-                {timeSlots.map(ts => <option key={ts.id} value={ts.end_time}>{ts.end_time}</option>)}
-              </select>
-              <input placeholder="Salle" value={form.room} onChange={(e)=>setForm({...form, room: e.target.value})} className="border p-2 rounded col-span-2" />
-              <input placeholder="Notes" value={form.notes} onChange={(e)=>setForm({...form, notes: e.target.value})} className="border p-2 rounded col-span-2" />
+                onFocus={(e) => (e.target.style.borderColor=COL.from)}
+                onBlur={(e)  => (e.target.style.borderColor=T.inputBorder)} />
             </div>
 
-            <div className="mt-4 flex justify-end gap-2">
-              <button onClick={closeModal} className="px-4 py-2 rounded bg-gray-200">Annuler</button>
-              <button onClick={submitForm} className="px-4 py-2 rounded bg-gradient-to-r from-green-500 to-teal-500 text-white">{form.id ? "Modifier" : "Ajouter"}</button>
-            </div>
+            <button onClick={fetchInitial}
+              style={{
+                display:"flex", alignItems:"center", gap:6, padding:"8px 12px", borderRadius:10,
+                border:`1.5px solid ${T.cardBorder}`, background:T.cardBg, cursor:"pointer",
+                fontSize:12, fontWeight:700, color:T.textSecondary,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background=T.rowHover)}
+              onMouseLeave={(e) => (e.currentTarget.style.background=T.cardBg)}>
+              <FaSyncAlt style={{ width:11,height:11 }} className={loading?"animate-spin":""} />
+              Actualiser
+            </button>
+
+            <button onClick={exportPDF}
+              style={{
+                display:"flex", alignItems:"center", gap:6, padding:"8px 12px", borderRadius:10,
+                border:"none", cursor:"pointer",
+                fontSize:12, fontWeight:700, color:"#fff",
+                background:"linear-gradient(135deg,#ef4444,#dc2626)",
+                boxShadow:"0 3px 10px #ef444444",
+              }}>
+              <FaFilePdf style={{ width:11,height:11 }} />
+              PDF
+            </button>
+
+            <button onClick={openAdd}
+              style={{
+                display:"flex", alignItems:"center", gap:6, padding:"8px 14px", borderRadius:10,
+                border:"none", cursor:"pointer",
+                fontSize:12, fontWeight:800, color:"#fff",
+                background:`linear-gradient(135deg,${COL.from},${COL.to})`,
+                boxShadow:`0 3px 12px ${COL.shadow}`,
+              }}>
+              <FaPlus style={{ width:11,height:11 }} />
+              Ajouter un cours
+            </button>
           </div>
         </div>
+      </header>
+
+      <main style={{ maxWidth:1400, margin:"0 auto", padding:"20px 24px 0" }}>
+
+        {/* ══ SÉLECTEUR DE CLASSES ══ */}
+        <div style={{
+          borderRadius:16, padding:"14px 18px", marginBottom:16,
+          background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
+          boxShadow:T.cardShadow,
+        }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+            <p style={{ fontSize:11, fontWeight:800, textTransform:"uppercase",
+              letterSpacing:"0.08em", color:T.textMuted, flexShrink:0 }}>
+              Classes
+            </p>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6, flex:1 }}>
+              {loading && !classes.length
+                ? <p style={{ fontSize:12, color:T.textMuted, fontStyle:"italic" }}>Chargement…</p>
+                : classes.map((cls, idx) => {
+                    const active = selectedCls.includes(cls.id);
+                    const [from, to] = CLASS_GRADIENTS[idx % CLASS_GRADIENTS.length];
+                    return (
+                      <button key={cls.id} onClick={() => toggleClass(cls.id)}
+                        style={{
+                          display:"flex", alignItems:"center", gap:6,
+                          padding:"5px 12px", borderRadius:999, border:"none",
+                          cursor:"pointer", fontSize:11, fontWeight:700,
+                          transition:"all .15s",
+                          background: active
+                            ? `linear-gradient(135deg,${from},${to})`
+                            : (dark ? "rgba(255,255,255,0.06)" : "#f1f5f9"),
+                          color: active ? "#fff" : T.textSecondary,
+                          boxShadow: active ? `0 3px 10px ${from}55` : "none",
+                          transform: active ? "translateY(-1px)" : "none",
+                        }}>
+                        {active && (
+                          <div style={{ width:6, height:6, borderRadius:"50%", background:"rgba(255,255,255,.7)" }} />
+                        )}
+                        {cls.name}
+                        {cls.level?.name && (
+                          <span style={{ opacity:.7, fontWeight:500 }}>{cls.level.name}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+            </div>
+            {selectedCls.length > 0 && (
+              <button onClick={() => setSelectedCls([])}
+                style={{
+                  padding:"5px 10px", borderRadius:8,
+                  border:`1px solid ${T.cardBorder}`, background:"transparent",
+                  cursor:"pointer", fontSize:10, fontWeight:700, color:T.textMuted,
+                  flexShrink:0,
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.color="#ef4444", e.currentTarget.style.borderColor="#ef444444")}
+                onMouseLeave={(e) => (e.currentTarget.style.color=T.textMuted, e.currentTarget.style.borderColor=T.cardBorder)}>
+                Tout désélectionner
+              </button>
+            )}
+          </div>
+
+          {/* Chips classes actives */}
+          {selectedCls.length > 0 && (
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:10, flexWrap:"wrap" }}>
+              <p style={{ fontSize:10, color:T.textMuted, fontWeight:600 }}>Affichées :</p>
+              {selectedCls.map((id) => {
+                const cls = classes.find((c) => c.id === id);
+                const idx = classes.findIndex((c) => c.id === id);
+                const [from, to] = CLASS_GRADIENTS[idx % CLASS_GRADIENTS.length];
+                return cls ? (
+                  <span key={id} style={{
+                    display:"inline-flex", alignItems:"center", gap:5,
+                    padding:"3px 10px", borderRadius:999, fontSize:10, fontWeight:700,
+                    background:`${from}18`, color:from, border:`1px solid ${from}44`,
+                  }}>
+                    <div style={{ width:6,height:6,borderRadius:"50%",background:`linear-gradient(135deg,${from},${to})` }} />
+                    {cls.name}
+                  </span>
+                ) : null;
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* ══ GRILLE ══ */}
+        <div style={{
+          borderRadius:16, overflow:"hidden",
+          background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
+          boxShadow:T.cardShadow, marginBottom:16,
+        }}>
+          {loading ? (
+            <div style={{ padding:"60px 24px", display:"flex", flexDirection:"column",
+              alignItems:"center", justifyContent:"center", gap:14 }}>
+              <FaSyncAlt style={{ width:28,height:28,color:COL.from }} className="animate-spin" />
+              <p style={{ fontSize:13, color:T.textMuted }}>Chargement…</p>
+            </div>
+          ) : selectedCls.length === 0 ? (
+            <div style={{ padding:"70px 24px", display:"flex", flexDirection:"column",
+              alignItems:"center", justifyContent:"center", gap:12, textAlign:"center" }}>
+              <div style={{
+                width:68, height:68, borderRadius:20,
+                display:"flex", alignItems:"center", justifyContent:"center",
+                background:`linear-gradient(135deg,${COL.from}22,${COL.to}11)`,
+              }}>
+                <FaCalendarAlt style={{ width:28,height:28,color:COL.from,opacity:.6 }} />
+              </div>
+              <p style={{ fontSize:16, fontWeight:800, color:T.textSecondary }}>
+                Aucune classe sélectionnée
+              </p>
+              <p style={{ fontSize:12, color:T.textMuted, maxWidth:280, lineHeight:1.6 }}>
+                Cliquez sur une ou plusieurs classes ci-dessus pour afficher leur emploi du temps.
+              </p>
+            </div>
+          ) : timeLabels.length === 0 ? (
+            <div style={{ padding:"48px 24px", textAlign:"center" }}>
+              <p style={{ fontSize:13, color:T.textMuted, fontStyle:"italic" }}>
+                Aucun créneau horaire défini. Ajoutez des créneaux depuis l'administration.
+              </p>
+            </div>
+          ) : (
+            <div style={{ overflowX:"auto" }} ref={pdfRef}>
+              <div style={{ minWidth: gridMinW }}>
+
+                {/* ── En-tête jours ── */}
+                <div style={{
+                  display:"grid", gridTemplateColumns: gridCols,
+                  background:T.tableHead, borderBottom:`2px solid ${T.divider}`,
+                }}>
+                  <div style={{ padding:"10px 12px" }}>
+                    <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
+                      letterSpacing:"0.1em", color:T.textMuted }}>
+                      Horaire
+                    </p>
+                  </div>
+                  {WEEKDAYS.map((d) => {
+                    // Compter les cours ce jour
+                    const count = displayedEntries.filter((e) => parseInt(e.weekday) === d.v).length;
+                    return (
+                      <div key={d.v} style={{
+                        padding:"10px 12px",
+                        borderLeft:`1px solid ${T.divider}`,
+                        display:"flex", alignItems:"center", justifyContent:"space-between",
+                      }}>
+                        <p style={{ fontSize:12, fontWeight:800, color:T.textPrimary }}>{d.label}</p>
+                        {count > 0 && (
+                          <span style={{
+                            fontSize:10, fontWeight:700, padding:"1px 6px", borderRadius:999,
+                            background: dark ? COL.darkBg : COL.lightBg,
+                            color:COL.text, border:`1px solid ${COL.from}44`,
+                          }}>
+                            {count}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* ── Lignes horaires ── */}
+                {timeLabels.map((tl, idx) => {
+                  const isEven = idx % 2 === 0;
+                  return (
+                    <div key={tl} style={{
+                      display:"grid", gridTemplateColumns: gridCols,
+                      borderBottom: idx < timeLabels.length - 1 ? `1px solid ${T.divider}` : "none",
+                      background: isEven
+                        ? T.cardBg
+                        : (dark ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.012)"),
+                      minHeight: 72,
+                    }}>
+                      {/* Colonne heure */}
+                      <div style={{
+                        padding:"8px 10px",
+                        display:"flex", flexDirection:"column", justifyContent:"center",
+                        borderRight:`1px solid ${T.divider}`,
+                      }}>
+                        {tl.split("–").map((part, i) => (
+                          <p key={i} style={{
+                            fontSize: i===0 ? 12 : 10,
+                            fontWeight: i===0 ? 800 : 500,
+                            color: i===0 ? COL.from : T.textMuted,
+                            lineHeight:1.3,
+                          }}>
+                            {i===0 ? part.trim() : `— ${part.trim()}`}
+                          </p>
+                        ))}
+                      </div>
+
+                      {/* Colonnes jours */}
+                      {WEEKDAYS.map((d) => (
+                        <div key={d.v} style={{
+                          padding:"4px 6px",
+                          borderLeft:`1px solid ${T.divider}`,
+                        }}>
+                          {renderCell(d.v, tl)}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ══ LÉGENDE ══ */}
+        {legendClasses.length > 0 && (
+          <div style={{
+            borderRadius:14, padding:"12px 18px", marginBottom:16,
+            background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
+            boxShadow:T.cardShadow,
+            display:"flex", alignItems:"center", gap:16, flexWrap:"wrap",
+          }}>
+            <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
+              letterSpacing:"0.08em", color:T.textMuted, flexShrink:0 }}>
+              Légende
+            </p>
+            {legendClasses.map((cls) => {
+              const idx = classes.findIndex((c) => c.id === cls.id);
+              const [from, to] = CLASS_GRADIENTS[idx % CLASS_GRADIENTS.length];
+              const count = displayedEntries.filter((e) => e.school_class === cls.id).length;
+              return (
+                <div key={cls.id} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                  <div style={{
+                    width:14, height:14, borderRadius:4, flexShrink:0,
+                    background:`linear-gradient(135deg,${from},${to})`,
+                    boxShadow:`0 2px 6px ${from}44`,
+                  }} />
+                  <span style={{ fontSize:12, fontWeight:700, color:T.textPrimary }}>{cls.name}</span>
+                  <span style={{ fontSize:10, color:T.textMuted }}>
+                    {cls.level?.name} · {count} cours
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+
+      {/* ══ MODAL ══ */}
+      {showModal && form && (
+        <EntryModal
+          form={form} setForm={setForm}
+          onClose={() => setShowModal(false)}
+          onSubmit={submitForm}
+          saving={savingModal}
+          classes={classes}
+          subjects={subjects}
+          teachers={teachers}
+          timeSlots={timeSlots}
+        />
       )}
+
+      <Toast msg={msg} onClose={() => setMsg(null)} />
+
+      <style>{BASE_KEYFRAMES}{`
+        .animate-spin  { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+        .custom-scrollbar::-webkit-scrollbar { width:4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background:${COL.from}66; border-radius:10px; }
+      `}</style>
     </div>
   );
-}*/
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   ROOT (avec ThemeCtx.Provider)
+────────────────────────────────────────────────────────────────── */
+const Timetable = () => {
+  const [dark, setDark] = useState(() => {
+    try { return localStorage.getItem("scol360_dark") === "true"; } catch { return false; }
+  });
+  const toggle = useCallback(() => {
+    setDark((v) => { const n=!v; try{localStorage.setItem("scol360_dark",String(n));}catch{} return n; });
+  }, []);
+  return (
+    <ThemeCtx.Provider value={{ dark, toggle }}>
+      <TimetableInner />
+    </ThemeCtx.Provider>
+  );
+};
+
+export default Timetable;
