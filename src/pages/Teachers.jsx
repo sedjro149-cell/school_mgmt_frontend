@@ -1,441 +1,690 @@
-import React, { useEffect, useState, useMemo } from "react";
+// src/pages/Teachers.jsx
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import {
-  FaSearch,
-  FaPlus,
-  FaEdit,
-  FaTrash,
-  FaSyncAlt,
-  FaChalkboardTeacher,
-  FaBookOpen,
-  FaUsers,
-  FaEnvelope,
-  FaIdCard,
-  FaTimes,
-  FaCheck,
-  FaChevronLeft,
-  FaChevronRight
+  FaUserTie, FaPlus, FaSearch, FaEdit, FaTrash, FaSyncAlt,
+  FaTimes, FaCheck, FaEye, FaEyeSlash, FaChalkboardTeacher,
+  FaEnvelope, FaAt, FaBookOpen, FaExclamationTriangle,
+  FaShieldAlt, FaMoon, FaSun, FaUsers, FaLayerGroup,
 } from "react-icons/fa";
-import { fetchData, postData, patchData, deleteData } from "./api";
+import { fetchData, postData, putData, deleteData } from "./api";
+import {
+  ThemeCtx, useTheme,
+  LIGHT, DARK,
+  SECTION_PALETTE, avatarGradient,
+  BASE_KEYFRAMES,
+} from "./theme";
 
-/* --- COMPONENTS --- */
+const COL = SECTION_PALETTE.teachers; // ambre → jaune
 
-const Avatar = ({ firstName, lastName }) => {
-  const initials = `${(firstName || "?")[0]}${(lastName || "?")[0]}`.toUpperCase();
+/* ═══════════════════════════════════════════════════════════
+   COMPOSANTS ATOMIQUES
+═══════════════════════════════════════════════════════════ */
+
+const Avatar = ({ firstName, lastName, size = 44 }) => {
+  const initials = `${(firstName || "?")[0]}${(lastName || "")[0] || ""}`.toUpperCase();
+  const [from, to] = avatarGradient(firstName);
   return (
-    <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-bold text-sm shadow-md ring-2 ring-white">
+    <div
+      className="flex-shrink-0 flex items-center justify-center font-black select-none"
+      style={{
+        width: size, height: size,
+        borderRadius: size * 0.28,
+        background: `linear-gradient(135deg, ${from}, ${to})`,
+        boxShadow: `0 4px 12px ${from}55`,
+        color: "#fff",
+        fontSize: size * 0.34,
+      }}
+    >
       {initials}
     </div>
   );
 };
 
-const SubjectBadge = ({ subject }) => (
-  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold border border-emerald-100">
-    <FaBookOpen size={11} />
-    {subject || "Non assigné"}
-  </span>
-);
-
-const ClassTag = ({ name }) => (
-  <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[11px] font-medium border border-slate-200 mr-1">
-    {name}
-  </span>
-);
-
-const Modal = ({ isOpen, onClose, title, children }) => {
-  if (!isOpen) return null;
+const DarkToggle = () => {
+  const { dark, toggle } = useTheme();
+  const [hov, setHov] = useState(false);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden transform transition-all scale-100 max-h-[90vh]">
-        <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-          <h3 className="text-lg font-bold text-slate-800">{title}</h3>
-          <button onClick={onClose} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition"><FaTimes /></button>
+    <button
+      onClick={toggle}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      title={dark ? "Mode clair" : "Mode sombre"}
+      className="relative rounded-full focus:outline-none transition-all duration-300 flex-shrink-0"
+      style={{
+        width: 52, height: 28,
+        background: dark
+          ? "linear-gradient(135deg,#6366f1,#8b5cf6)"
+          : `linear-gradient(135deg,${COL.from},${COL.to})`,
+        boxShadow: hov
+          ? dark ? "0 0 18px #6366f199" : `0 0 18px ${COL.shadow}`
+          : "0 2px 8px rgba(0,0,0,.2)",
+      }}
+    >
+      <div
+        className="absolute top-0.5 w-6 h-6 rounded-full bg-white flex items-center justify-center transition-all duration-300"
+        style={{ left: dark ? "calc(100% - 26px)" : "2px", boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}
+      >
+        {dark ? <FaMoon style={{ width:12,height:12,color:"#6366f1" }} />
+               : <FaSun  style={{ width:12,height:12,color:COL.from  }} />}
+      </div>
+    </button>
+  );
+};
+
+const Toast = ({ msg, onClose }) => {
+  useEffect(() => { if (msg) { const t = setTimeout(onClose, 4500); return () => clearTimeout(t); } }, [msg, onClose]);
+  if (!msg) return null;
+  const bg = msg.type === "error"
+    ? "linear-gradient(135deg,#ef4444,#dc2626)"
+    : `linear-gradient(135deg,${COL.from},${COL.to})`;
+  return (
+    <div onClick={onClose} className="fixed bottom-6 right-6 z-[300] flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl cursor-pointer text-white text-sm font-bold max-w-sm"
+      style={{ background: bg, animation: "slideUp .3s cubic-bezier(.34,1.56,.64,1)" }}>
+      <FaCheck style={{ width:14,height:14,flexShrink:0 }} />
+      {msg.text}
+    </div>
+  );
+};
+
+const Backdrop = ({ children, onClose }) => (
+  <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4"
+    style={{ background:"rgba(2,6,23,.7)", backdropFilter:"blur(8px)", animation:"fadeIn .18s ease-out" }}>
+    <div className="absolute inset-0" onClick={onClose} />
+    {children}
+  </div>
+);
+
+const Panel = ({ children, className = "" }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  return (
+    <div className={`relative w-full flex flex-col overflow-hidden ${className}`}
+      style={{ background:T.cardBg, border:`1px solid ${T.cardBorder}`, borderRadius:20,
+        boxShadow:"0 24px 64px rgba(0,0,0,.35)", maxHeight:"95dvh",
+        animation:"panelUp .3s cubic-bezier(.34,1.4,.64,1)" }}>
+      {children}
+    </div>
+  );
+};
+
+const SectionLabel = ({ icon, text }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  return (
+    <div className="flex items-center gap-2 mb-3">
+      <span style={{ color:T.textMuted }}>{icon}</span>
+      <span className="text-[10px] font-black uppercase tracking-widest" style={{ color:T.textMuted }}>{text}</span>
+      <div className="flex-1 h-px" style={{ background:T.divider }} />
+    </div>
+  );
+};
+
+const FormField = ({ label, sublabel, error, required, children }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  return (
+    <div>
+      <div className="flex items-baseline gap-1.5 mb-1.5">
+        <label className="text-xs font-bold uppercase tracking-wider" style={{ color:T.textSecondary }}>{label}</label>
+        {required && <span className="text-[10px] font-bold" style={{ color:COL.from }}>*</span>}
+        {sublabel && <span className="text-[10px] italic" style={{ color:T.textMuted }}>{sublabel}</span>}
+      </div>
+      {children}
+      {error && (
+        <p className="mt-1 text-[11px] flex items-center gap-1 font-medium" style={{ color:"#ef4444" }}>
+          <FaExclamationTriangle style={{ width:9,height:9 }} />{error}
+        </p>
+      )}
+    </div>
+  );
+};
+
+const TextInput = React.forwardRef(({ icon: Icon, hasError, ...props }, ref) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  const [focused, setFocused] = useState(false);
+  return (
+    <div className="relative">
+      {Icon && (
+        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none transition-colors duration-150"
+          style={{ color: focused ? COL.from : T.textMuted }}>
+          <Icon style={{ width:13,height:13 }} />
+        </span>
+      )}
+      <input ref={ref} {...props}
+        onFocus={(e) => { setFocused(true); props.onFocus?.(e); }}
+        onBlur={(e)  => { setFocused(false); props.onBlur?.(e); }}
+        className="w-full py-2.5 text-sm rounded-xl outline-none transition-all duration-150 placeholder:opacity-40"
+        style={{
+          paddingLeft: Icon ? "2.5rem" : "1rem", paddingRight:"1rem",
+          background:  hasError ? (dark?"#2a0a0a":"#fef2f2") : T.inputBg,
+          border:`1.5px solid ${hasError?"#ef4444":focused?COL.from:T.inputBorder}`,
+          boxShadow: focused && !hasError ? `0 0 0 3px ${COL.from}22` : "none",
+          color: T.textPrimary,
+        }} />
+    </div>
+  );
+});
+TextInput.displayName = "TextInput";
+
+/* ═══════════════════════════════════════════════════════════
+   MODAL SUPPRESSION
+═══════════════════════════════════════════════════════════ */
+const DeleteModal = ({ teacher, onClose, onDeleted, setMsg }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    try {
+      await deleteData(`/core/admin/teachers/${teacher.id}/`);
+      setMsg({ type:"success", text:"Professeur supprimé avec succès." });
+      onDeleted(); onClose();
+    } catch {
+      setMsg({ type:"error", text:"Impossible de supprimer ce professeur." });
+      setBusy(false);
+    }
+  };
+  return (
+    <Backdrop onClose={onClose}>
+      <Panel className="max-w-sm">
+        <div className="h-1.5 flex-shrink-0" style={{ background:"linear-gradient(90deg,#ef4444,#dc2626)" }} />
+        <div className="p-7 flex flex-col items-center text-center gap-5">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background:"#fef2f2",color:"#ef4444" }}>
+            <FaTrash style={{ width:22,height:22 }} />
+          </div>
+          <div>
+            <p className="text-base font-black mb-1" style={{ color:T.textPrimary }}>Supprimer ce professeur ?</p>
+            <p className="text-sm" style={{ color:T.textSecondary }}>
+              <span className="font-bold" style={{ color:T.textPrimary }}>{teacher.user?.first_name} {teacher.user?.last_name}</span>{" "}
+              sera définitivement retiré du système.
+            </p>
+          </div>
+          <div className="flex gap-3 w-full">
+            <button onClick={onClose} className="flex-1 py-2.5 text-sm font-bold rounded-xl transition-all focus:outline-none"
+              style={{ border:`1.5px solid ${T.cardBorder}`,color:T.textSecondary,background:T.cardBg }}>
+              Annuler
+            </button>
+            <button onClick={go} disabled={busy}
+              className="flex-1 py-2.5 text-sm font-black text-white rounded-xl flex items-center justify-center gap-2 transition-all focus:outline-none disabled:opacity-60"
+              style={{ background:"linear-gradient(135deg,#ef4444,#dc2626)",boxShadow:"0 4px 14px #ef444440" }}>
+              {busy ? <FaSyncAlt style={{ width:12,height:12 }} className="animate-spin" /> : <FaTrash style={{ width:12,height:12 }} />}
+              Supprimer
+            </button>
+          </div>
         </div>
-        <div className="p-6 custom-scrollbar overflow-y-auto">
-          {children}
+      </Panel>
+    </Backdrop>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   MODAL CRÉER / MODIFIER
+═══════════════════════════════════════════════════════════ */
+const TeacherModal = ({ teacher, subjects, onClose, onSaved, setMsg }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  const isEdit = !!teacher;
+  const [form, setForm] = useState({
+    first_name: teacher?.user?.first_name ?? "",
+    last_name:  teacher?.user?.last_name  ?? "",
+    username:   teacher?.user?.username   ?? "",
+    email:      teacher?.user?.email      ?? "",
+    password:   "",
+    subject_id: teacher?.subject?.id      ?? "",
+  });
+  const [showPwd, setShowPwd] = useState(false);
+  const [errors,  setErrors]  = useState({});
+  const [saving,  setSaving]  = useState(false);
+  const firstRef = useRef(null);
+
+  useEffect(() => { setTimeout(() => firstRef.current?.focus(), 120); }, []);
+
+  const set = (k, v) => { setForm((p) => ({ ...p, [k]:v })); setErrors((p) => ({ ...p, [k]:undefined,global:undefined })); };
+
+  const validate = () => {
+    const e = {};
+    if (!form.first_name.trim()) e.first_name = "Prénom obligatoire.";
+    if (!form.last_name.trim())  e.last_name  = "Nom obligatoire.";
+    if (!form.username.trim())   e.username   = "Identifiant obligatoire.";
+    if (!isEdit && !form.password.trim()) e.password = "Mot de passe obligatoire.";
+    if (form.password && form.password.length < 6) e.password = "6 caractères minimum.";
+    return e;
+  };
+
+  const handleSave = async () => {
+    const e = validate();
+    if (Object.keys(e).length) { setErrors(e); return; }
+    setSaving(true);
+    try {
+      const payload = {
+        user: {
+          username: form.username.trim(), first_name: form.first_name.trim(),
+          last_name: form.last_name.trim(), email: form.email.trim(),
+          ...(form.password ? { password: form.password } : {}),
+        },
+        subject_id: form.subject_id ? parseInt(form.subject_id) : null,
+      };
+      if (isEdit) {
+        await putData(`/core/admin/teachers/${teacher.id}/`, payload);
+        setMsg({ type:"success", text:"Professeur mis à jour." });
+      } else {
+        await postData("/core/admin/teachers/", payload);
+        setMsg({ type:"success", text:"Professeur créé avec succès." });
+      }
+      onSaved(); onClose();
+    } catch (err) {
+      const d = err?.response?.data ?? err?.data;
+      if (d?.user?.username) setErrors({ username: Array.isArray(d.user.username) ? d.user.username[0] : d.user.username });
+      else if (d?.user?.email) setErrors({ email: Array.isArray(d.user.email) ? d.user.email[0] : d.user.email });
+      else setErrors({ global: d?.detail ?? "Une erreur est survenue." });
+    } finally { setSaving(false); }
+  };
+
+  const selectedSubject = subjects.find((s) => String(s.id) === String(form.subject_id));
+
+  return (
+    <Backdrop onClose={onClose}>
+      <Panel className="max-w-xl">
+        <div className="h-1.5 flex-shrink-0" style={{ background:`linear-gradient(90deg,${COL.from},${COL.to})` }} />
+        {/* Header */}
+        <div className="flex items-center justify-between px-7 pt-6 pb-4 flex-shrink-0" style={{ borderBottom:`1px solid ${T.divider}` }}>
+          <div className="flex items-center gap-4">
+            <Avatar firstName={form.first_name || teacher?.user?.first_name || "?"} lastName={form.last_name || teacher?.user?.last_name || ""} size={48} />
+            <div>
+              <h2 className="text-lg font-black tracking-tight" style={{ color:T.textPrimary }}>
+                {isEdit ? "Modifier le professeur" : "Nouveau professeur"}
+              </h2>
+              <p className="text-xs mt-0.5" style={{ color:T.textMuted }}>
+                {isEdit ? `${teacher.user?.first_name} ${teacher.user?.last_name} · #${teacher.id}` : "Identité et accès au système"}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center transition-all focus:outline-none"
+            style={{ color:T.textMuted }}
+            onMouseEnter={(e) => { e.currentTarget.style.background="#ef444418"; e.currentTarget.style.color="#ef4444"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background="transparent"; e.currentTarget.style.color=T.textMuted; }}>
+            <FaTimes style={{ width:14,height:14 }} />
+          </button>
+        </div>
+
+        {errors.global && (
+          <div className="mx-7 mt-4 flex items-start gap-2.5 p-3.5 rounded-xl text-sm"
+            style={{ background:"#fef2f2",border:"1px solid #fecaca",color:"#b91c1c" }}>
+            <FaExclamationTriangle style={{ width:13,height:13,flexShrink:0,marginTop:2 }} />
+            {errors.global}
+          </div>
+        )}
+
+        <div className="flex-1 overflow-y-auto px-7 pt-5 pb-2 space-y-5 custom-scrollbar">
+          {/* Identité */}
+          <div>
+            <SectionLabel icon={<FaUserTie style={{ width:10,height:10 }} />} text="Identité" />
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Prénom" required error={errors.first_name}>
+                <TextInput ref={firstRef} placeholder="ex : Kofi" value={form.first_name}
+                  onChange={(e) => set("first_name", e.target.value)} hasError={!!errors.first_name} />
+              </FormField>
+              <FormField label="Nom" required error={errors.last_name}>
+                <TextInput placeholder="ex : Mensah" value={form.last_name}
+                  onChange={(e) => set("last_name", e.target.value)} hasError={!!errors.last_name} />
+              </FormField>
+            </div>
+          </div>
+          {/* Accès */}
+          <div>
+            <SectionLabel icon={<FaShieldAlt style={{ width:10,height:10 }} />} text="Accès au système" />
+            <div className="space-y-3">
+              <FormField label="Identifiant" required error={errors.username}>
+                <TextInput icon={FaAt} placeholder="ex : k.mensah" value={form.username}
+                  onChange={(e) => set("username", e.target.value)} hasError={!!errors.username} />
+              </FormField>
+              <FormField label="Email" error={errors.email}>
+                <TextInput icon={FaEnvelope} type="email" placeholder="ex : k.mensah@ecole.bj"
+                  value={form.email} onChange={(e) => set("email", e.target.value)} hasError={!!errors.email} />
+              </FormField>
+              <FormField label={isEdit ? "Nouveau mot de passe" : "Mot de passe"}
+                sublabel={isEdit ? "Laisser vide pour conserver l'actuel" : ""} required={!isEdit} error={errors.password}>
+                <div className="relative">
+                  <input type={showPwd ? "text" : "password"}
+                    placeholder={isEdit ? "••••••  (inchangé si vide)" : "Minimum 6 caractères"}
+                    value={form.password} onChange={(e) => set("password", e.target.value)}
+                    className="w-full pr-11 pl-4 py-2.5 text-sm rounded-xl outline-none transition-all placeholder:opacity-40"
+                    style={{
+                      background: errors.password ? (dark?"#2a0a0a":"#fef2f2") : T.inputBg,
+                      border:`1.5px solid ${errors.password?"#ef4444":T.inputBorder}`, color:T.textPrimary,
+                    }}
+                    onFocus={(e) => !errors.password && (e.currentTarget.style.borderColor=COL.from)}
+                    onBlur={(e)  => !errors.password && (e.currentTarget.style.borderColor=T.inputBorder)} />
+                  <button type="button" onClick={() => setShowPwd((v) => !v)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 transition-colors focus:outline-none"
+                    style={{ color:T.textMuted }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color=COL.from)}
+                    onMouseLeave={(e) => (e.currentTarget.style.color=T.textMuted)}>
+                    {showPwd ? <FaEyeSlash style={{ width:14,height:14 }} /> : <FaEye style={{ width:14,height:14 }} />}
+                  </button>
+                </div>
+              </FormField>
+            </div>
+          </div>
+          {/* Matière */}
+          <div>
+            <SectionLabel icon={<FaBookOpen style={{ width:10,height:10 }} />} text="Matière enseignée" />
+            <select value={form.subject_id} onChange={(e) => set("subject_id", e.target.value)}
+              className="w-full appearance-none px-4 py-2.5 text-sm rounded-xl outline-none transition-all"
+              style={{ background:T.inputBg, border:`1.5px solid ${T.inputBorder}`, color: form.subject_id ? T.textPrimary : T.textMuted }}
+              onFocus={(e) => (e.currentTarget.style.borderColor=COL.from)}
+              onBlur={(e)  => (e.currentTarget.style.borderColor=T.inputBorder)}>
+              <option value="">— Aucune matière pour l'instant —</option>
+              {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            {selectedSubject && (
+              <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold"
+                style={{ background:dark?COL.darkBg:COL.lightBg, border:`1px solid ${COL.from}44`, color:COL.text }}>
+                <FaBookOpen style={{ width:11,height:11,flexShrink:0 }} />
+                {selectedSubject.name}
+                <span className="ml-auto opacity-60">Attribution aux classes sur la page dédiée.</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-7 py-5 flex items-center justify-between gap-3 flex-shrink-0"
+          style={{ borderTop:`1px solid ${T.divider}` }}>
+          <button onClick={onClose} className="px-5 py-2.5 text-sm font-bold rounded-xl transition-all focus:outline-none"
+            style={{ color:T.textSecondary }}
+            onMouseEnter={(e) => (e.currentTarget.style.background=dark?"rgba(255,255,255,0.06)":"#f1f5f9")}
+            onMouseLeave={(e) => (e.currentTarget.style.background="transparent")}>
+            Annuler
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            className="flex items-center gap-2.5 px-6 py-2.5 text-sm font-black text-white rounded-xl transition-all focus:outline-none active:scale-95 disabled:opacity-60"
+            style={{ background:`linear-gradient(135deg,${COL.from},${COL.to})`, boxShadow:`0 4px 16px ${COL.shadow}` }}>
+            {saving ? <FaSyncAlt style={{ width:13,height:13 }} className="animate-spin" />
+              : isEdit ? <FaCheck style={{ width:13,height:13 }} /> : <FaPlus style={{ width:13,height:13 }} />}
+            {saving ? "Enregistrement…" : isEdit ? "Sauvegarder" : "Créer le professeur"}
+          </button>
+        </div>
+      </Panel>
+    </Backdrop>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════
+   TEACHER CARD
+═══════════════════════════════════════════════════════════ */
+const TeacherCard = ({ teacher, onEdit, onDelete, style: animStyle }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  const fn = teacher.user?.first_name ?? "";
+  const ln = teacher.user?.last_name  ?? "";
+  const subj    = teacher.subject;
+  const classes = teacher.classes ?? [];
+  const [from]  = avatarGradient(fn);
+  const [hov, setHov] = useState(false);
+
+  return (
+    <div className="group rounded-2xl overflow-hidden transition-all duration-200"
+      style={{
+        background:T.cardBg, border:`1.5px solid ${hov?COL.from+"55":T.cardBorder}`,
+        boxShadow: hov ? T.cardShadowHov : T.cardShadow,
+        transform: hov ? "translateY(-3px)" : "translateY(0)", ...animStyle,
+      }}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}>
+
+      <div className="h-1 w-full transition-all duration-300"
+        style={{ background:`linear-gradient(90deg,${from}${hov?"ee":"55"},${from}11)` }} />
+
+      <div className="p-5">
+        <div className="flex items-start justify-between gap-2 mb-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <Avatar firstName={fn} lastName={ln} size={44} />
+            <div className="min-w-0">
+              <p className="font-black text-sm leading-tight truncate" style={{ color:T.textPrimary }}>{fn} {ln}</p>
+              <p className="text-[11px] truncate mt-0.5" style={{ color:T.textSecondary }}>
+                {teacher.user?.email || teacher.user?.username || "—"}
+              </p>
+              <p className="text-[10px] font-mono mt-0.5" style={{ color:T.textMuted }}>#{teacher.id}</p>
+            </div>
+          </div>
+          <div className="flex gap-1 transition-all duration-150"
+            style={{ opacity:hov?1:0, transform:hov?"translateX(0)":"translateX(4px)" }}>
+            <button onClick={() => onEdit(teacher)}
+              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all focus:outline-none"
+              style={{ color:T.textMuted }}
+              onMouseEnter={(e) => { e.currentTarget.style.background=`${COL.from}22`; e.currentTarget.style.color=COL.from; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background="transparent"; e.currentTarget.style.color=T.textMuted; }}>
+              <FaEdit style={{ width:13,height:13 }} />
+            </button>
+            <button onClick={() => onDelete(teacher)}
+              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all focus:outline-none"
+              style={{ color:T.textMuted }}
+              onMouseEnter={(e) => { e.currentTarget.style.background="#ef444422"; e.currentTarget.style.color="#ef4444"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background="transparent"; e.currentTarget.style.color=T.textMuted; }}>
+              <FaTrash style={{ width:13,height:13 }} />
+            </button>
+          </div>
+        </div>
+
+        <div className="mb-3">
+          {subj ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-black"
+              style={{ background:dark?COL.darkBg:COL.lightBg, border:`1px solid ${COL.from}44`, color:COL.text }}>
+              <FaBookOpen style={{ width:9,height:9 }} />{subj.name}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs"
+              style={{ background:T.divider, color:T.textMuted }}>Aucune matière</span>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-1.5 min-h-[22px]">
+          {classes.length === 0
+            ? <span className="text-[11px] italic" style={{ color:T.textMuted }}>Aucune classe assignée</span>
+            : <>
+                {classes.slice(0,4).map((c) => (
+                  <span key={c.id} className="px-2 py-0.5 rounded-md text-[11px] font-bold"
+                    style={{ background:T.divider, border:`1px solid ${T.cardBorder}`, color:T.textSecondary }}>
+                    {c.name}
+                  </span>
+                ))}
+                {classes.length > 4 && (
+                  <span className="px-2 py-0.5 rounded-md text-[11px] font-black text-white"
+                    style={{ background:`linear-gradient(135deg,${COL.from},${COL.to})` }}>
+                    +{classes.length - 4}
+                  </span>
+                )}
+              </>
+          }
         </div>
       </div>
     </div>
   );
 };
 
-/* --- TEACHERS COMPONENT (updated: server-side search + pagination + list view) --- */
+/* ═══════════════════════════════════════════════════════════
+   PAGE PRINCIPALE
+═══════════════════════════════════════════════════════════ */
+const TeachersInner = () => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
 
-const Teachers = () => {
-  /* --- STATE --- */
-  const [teachers, setTeachers] = useState([]); // current page results
-  const [subjects, setSubjects] = useState([]);
-  const [classes, setClasses] = useState([]);
+  const [teachers,   setTeachers]   = useState([]);
+  const [subjects,   setSubjects]   = useState([]);
+  const [loading,    setLoading]    = useState(false);
+  const [search,     setSearch]     = useState("");
+  const [filterSubj, setFilterSubj] = useState("");
+  const [msg,        setMsg]        = useState(null);
+  const [modal,      setModal]      = useState(null);
+  const [delTarget,  setDelTarget]  = useState(null);
 
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  // pagination & search
-  const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [count, setCount] = useState(0);
-  const [nextUrl, setNextUrl] = useState(null);
-  const [prevUrl, setPrevUrl] = useState(null);
-
-  // UI
-  const [showModal, setShowModal] = useState(false);
-  const [currentTeacher, setCurrentTeacher] = useState(null);
-
-  // Form
-  const [formData, setFormData] = useState({
-    username: "", email: "", firstName: "", lastName: "", password: "",
-    subjectId: "", classIds: []
-  });
-
-  /* --- HELPERS --- */
-
-  // Build teachers endpoint with params
-  const teachersEndpoint = (p = 1, q = "", ps = pageSize) => {
-    const base = `/core/admin/teachers/?page=${p}&page_size=${ps}`;
-    return q ? `${base}&search=${encodeURIComponent(q)}` : base;
-  };
-
-  const fetchTeachers = async (p = page, q = debouncedQuery) => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetchData(teachersEndpoint(p, q));
-      // DRF paginated response: {count, next, previous, results}
-      if (res && typeof res === "object" && Array.isArray(res.results)) {
-        setTeachers(res.results);
-        setCount(res.count ?? 0);
-        setNextUrl(res.next ?? null);
-        setPrevUrl(res.previous ?? null);
-      } else if (Array.isArray(res)) {
-        // backward compatibility: some endpoints might return array — handle it
-        setTeachers(res);
-        setCount(res.length);
-        setNextUrl(null);
-        setPrevUrl(null);
-      } else {
-        setTeachers([]);
-        setCount(0);
-        setNextUrl(null);
-        setPrevUrl(null);
-      }
-    } catch (err) {
-      console.error("Erreur fetchTeachers:", err);
-      alert("Erreur lors du chargement des enseignants.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchSubjectsAndClasses = async () => {
-    try {
-      const [sData, cData] = await Promise.all([
+      const [t, s] = await Promise.all([
+        fetchData("/core/admin/teachers/?no_pagination=1"),
         fetchData("/academics/subjects/"),
-        fetchData("/academics/school-classes/")
       ]);
-      setSubjects(Array.isArray(sData) ? sData : sData?.results || []);
-      setClasses(Array.isArray(cData) ? cData : cData?.results || []);
-    } catch (err) {
-      console.error("Erreur fetch subjects/classes:", err);
-      alert("Erreur chargement matières / classes");
-    }
-  };
-
-  // load both once on mount
-  useEffect(() => {
-    fetchSubjectsAndClasses();
+      setTeachers(Array.isArray(t) ? t : (t?.results ?? []));
+      setSubjects(Array.isArray(s) ? s : []);
+    } catch { setMsg({ type:"error", text:"Erreur de chargement." }); }
+    finally { setLoading(false); }
   }, []);
 
-  // debounce query input (300ms)
-  useEffect(() => {
-    const t = setTimeout(() => {
-      setDebouncedQuery(query.trim());
-      setPage(1); // on new search, reset to page 1
-    }, 300);
-    return () => clearTimeout(t);
-  }, [query]);
+  useEffect(() => { load(); }, [load]);
 
-  // fetch teachers whenever page, pageSize or debouncedQuery change
-  useEffect(() => {
-    fetchTeachers(page, debouncedQuery);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, debouncedQuery]);
-
-  /* --- ACTIONS --- */
-
-  const openModal = (t = null) => {
-    setCurrentTeacher(t);
-    setFormData({
-      username: t?.user?.username || "",
-      email: t?.user?.email || "",
-      firstName: t?.user?.first_name || "",
-      lastName: t?.user?.last_name || "",
-      password: "",
-      subjectId: t?.subject?.id || "",
-      classIds: (t?.classes || []).map(c => c.id)
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return teachers.filter((t) => {
+      if (filterSubj && String(t.subject?.id) !== String(filterSubj)) return false;
+      if (!q) return true;
+      return [t.user?.first_name, t.user?.last_name, t.user?.username, t.subject?.name, t.id]
+        .filter(Boolean).some((v) => String(v).toLowerCase().includes(q));
     });
-    setShowModal(true);
-  };
+  }, [teachers, search, filterSubj]);
 
-  const handleSubmit = async () => {
-    if (!formData.email || !formData.firstName || !formData.lastName) return alert("Champs requis manquants.");
+  const stats = useMemo(() => ({
+    total:       teachers.length,
+    withSubject: teachers.filter((t) => t.subject).length,
+    withClasses: teachers.filter((t) => t.classes?.length > 0).length,
+  }), [teachers]);
 
-    const payload = {
-      user: { email: formData.email, first_name: formData.firstName, last_name: formData.lastName },
-      subject_id: formData.subjectId ? Number(formData.subjectId) : null,
-      class_ids: formData.classIds
-    };
-
-    if (!currentTeacher) {
-      if (!formData.username || !formData.password) return alert("Username et mot de passe requis.");
-      payload.user.username = formData.username;
-      payload.user.password = formData.password;
-    } else if (formData.password) {
-      payload.user.password = formData.password;
-    }
-
-    setSaving(true);
-    try {
-      if (currentTeacher) {
-        await patchData(`/core/admin/teachers/${currentTeacher.id}/`, payload);
-      } else {
-        await postData("/core/admin/teachers/", payload);
-      }
-      // refresh teachers current page
-      await fetchTeachers(page, debouncedQuery);
-      // refresh subjects/classes just in case
-      await fetchSubjectsAndClasses();
-      setShowModal(false);
-    } catch (err) {
-      console.error(err);
-      alert("Erreur enregistrement.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDelete = async (id) => {
-    if (!window.confirm("Supprimer cet enseignant ?")) return;
-    try {
-      await deleteData(`/core/admin/teachers/${id}/`);
-      // after delete, if current page becomes empty and previous page exists, go back
-      const isLastItemOnPage = teachers.length === 1 && page > 1;
-      const newPage = isLastItemOnPage ? page - 1 : page;
-      setPage(newPage);
-      await fetchTeachers(newPage, debouncedQuery);
-    } catch (err) {
-      console.error(err);
-      alert("Erreur suppression.");
-    }
-  };
-
-  const handleRefresh = async () => {
-    setQuery("");
-    setPage(1);
-    await fetchSubjectsAndClasses();
-    await fetchTeachers(1, "");
-  };
-
-  /* --- RENDER HELPERS --- */
-
-  const totalPages = useMemo(() => (pageSize > 0 ? Math.ceil(count / pageSize) : 1), [count, pageSize]);
-
-  const pageInfoText = `${Math.min((page - 1) * pageSize + 1, count || 0)} - ${Math.min(page * pageSize, count || 0)} sur ${count}`;
-
-  /* --- RENDER --- */
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 pb-20 font-sans">
-      {/* HEADER */}
-      <div className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm bg-opacity-90 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="min-h-screen pb-20 transition-colors duration-300"
+      style={{ background:T.pageBg, fontFamily:"'Plus Jakarta Sans', sans-serif" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+      {/* Header */}
+      <header className="sticky top-0 z-40 transition-colors duration-300"
+        style={{ background:T.headerBg, backdropFilter:"blur(16px)", borderBottom:`1px solid ${T.divider}` }}>
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3">
-               <div className="bg-emerald-100 p-2 rounded-lg text-emerald-600">
-                  <FaChalkboardTeacher size={20} />
-               </div>
-               <div>
-                 <h1 className="text-xl font-bold text-slate-900 leading-tight">Corps Enseignant</h1>
-                 <p className="text-xs text-slate-500">Gestion des professeurs et attributions</p>
-               </div>
+              <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background:`linear-gradient(135deg,${COL.from},${COL.to})`, boxShadow:`0 6px 20px ${COL.shadow}` }}>
+                <FaChalkboardTeacher style={{ width:20,height:20,color:"#fff" }} />
+              </div>
+              <div>
+                <h1 className="text-xl font-black tracking-tight" style={{ color:T.textPrimary }}>Corps Enseignant</h1>
+                <p className="text-xs" style={{ color:T.textMuted }}>
+                  {stats.total} professeur{stats.total !== 1 ? "s" : ""}
+                </p>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <button onClick={handleRefresh} className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-full transition">
-                <FaSyncAlt className={loading ? "animate-spin" : ""} />
+            <div className="flex items-center gap-2.5">
+              <DarkToggle />
+              <button onClick={load}
+                className="h-9 w-9 rounded-xl flex items-center justify-center transition-all focus:outline-none"
+                style={{ background:T.cardBg, border:`1.5px solid ${T.cardBorder}`, color:T.textSecondary }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor=COL.from; e.currentTarget.style.color=COL.from; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor=T.cardBorder; e.currentTarget.style.color=T.textSecondary; }}>
+                <FaSyncAlt style={{ width:14,height:14 }} className={loading?"animate-spin":""} />
               </button>
-              <button onClick={() => openModal()} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg shadow-md shadow-emerald-200 flex items-center gap-2 text-sm font-medium transition-transform active:scale-95">
-                <FaPlus /> Ajouter
+              <button onClick={() => setModal("create")}
+                className="flex items-center gap-2 px-4 h-9 rounded-xl text-sm font-black text-white transition-all focus:outline-none active:scale-95"
+                style={{ background:`linear-gradient(135deg,${COL.from},${COL.to})`, boxShadow:`0 4px 14px ${COL.shadow}` }}>
+                <FaPlus style={{ width:12,height:12 }} /> Nouveau professeur
               </button>
             </div>
           </div>
-
-          {/* Search */}
-          <div className="mt-4 max-w-2xl">
-            <div className="relative group">
-              <FaSearch className="absolute left-3 top-3 text-slate-400 group-focus-within:text-emerald-500 transition-colors" />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Rechercher (Nom, Matière, Email)..."
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-100 border-transparent focus:bg-white border focus:border-emerald-300 rounded-xl text-sm focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all"
-              />
+          {/* Filtres */}
+          <div className="mt-4 flex gap-3 flex-wrap">
+            <div className="relative flex-1" style={{ minWidth:200 }}>
+              <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
+                style={{ width:13,height:13,color:T.textMuted }} />
+              <input placeholder="Nom, identifiant, matière…" value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl outline-none transition-all placeholder:opacity-50"
+                style={{ background:T.inputBg, border:`1.5px solid ${T.inputBorder}`, color:T.textPrimary }}
+                onFocus={(e) => (e.currentTarget.style.borderColor=COL.from)}
+                onBlur={(e)  => (e.currentTarget.style.borderColor=T.inputBorder)} />
             </div>
-          </div>
-        </div>
-      </div>
-
-      {/* CONTENT */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* PAGINATION CONTROLS (top) */}
-        <div className="mb-4 flex items-center justify-between gap-4">
-          <div className="text-sm text-slate-600">{pageInfoText}</div>
-          <div className="flex items-center gap-2">
-            <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }} className="input text-sm">
-              <option value={10}>10 / page</option>
-              <option value={20}>20 / page</option>
-              <option value={50}>50 / page</option>
+            <select value={filterSubj} onChange={(e) => setFilterSubj(e.target.value)}
+              className="px-3 py-2.5 text-sm rounded-xl outline-none transition-all"
+              style={{ background:T.inputBg, border:`1.5px solid ${T.inputBorder}`,
+                color:filterSubj?T.textPrimary:T.textMuted, minWidth:180 }}
+              onFocus={(e) => (e.currentTarget.style.borderColor=COL.from)}
+              onBlur={(e)  => (e.currentTarget.style.borderColor=T.inputBorder)}>
+              <option value="">Toutes les matières</option>
+              {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
-
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="p-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">
-              <FaChevronLeft />
-            </button>
-            <div className="px-3 text-sm font-medium">Page {page} / {Math.max(1, totalPages)}</div>
-            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="p-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">
-              <FaChevronRight />
-            </button>
           </div>
         </div>
+      </header>
 
+      <main className="max-w-7xl mx-auto px-6 py-6">
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-4 mb-6">
+          {[
+            { label:"Total",        value:stats.total,       icon:FaUsers         },
+            { label:"Avec matière", value:stats.withSubject, icon:FaBookOpen      },
+            { label:"Avec classes", value:stats.withClasses, icon:FaLayerGroup    },
+          ].map((s, i) => (
+            <div key={i} className="rounded-2xl p-4 flex items-center gap-4"
+              style={{ background:T.cardBg, border:`1.5px solid ${T.cardBorder}`, boxShadow:T.cardShadow }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background:`linear-gradient(135deg,${COL.from}22,${COL.to}11)`, color:COL.from }}>
+                <s.icon style={{ width:18,height:18 }} />
+              </div>
+              <div>
+                <p className="text-2xl font-black" style={{ color:T.textPrimary }}>{s.value}</p>
+                <p className="text-xs mt-0.5" style={{ color:T.textMuted }}>{s.label}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Grille */}
         {loading ? (
-           <div className="space-y-3 animate-pulse">
-             {[...Array(6)].map((_, i) => (
-               <div key={i} className="h-16 bg-gray-200 rounded-xl"></div>
-             ))}
-           </div>
-        ) : teachers.length === 0 ? (
-           <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300">
-             <div className="bg-slate-50 p-4 rounded-full inline-block mb-4"><FaChalkboardTeacher className="text-4xl text-slate-300" /></div>
-             <h3 className="text-lg font-bold text-slate-700">Aucun enseignant trouvé</h3>
-           </div>
-        ) : (
-           <div className="space-y-3">
-             {teachers.map(t => {
-               const name = `${t.user?.first_name || ""} ${t.user?.last_name || ""}`.trim() || "Utilisateur";
-               return (
-                 <div key={t.id} className="bg-white rounded-2xl p-3 shadow-sm border border-slate-200 hover:shadow-lg transition-all flex items-center gap-4">
-                   <Avatar firstName={t.user?.first_name} lastName={t.user?.last_name} />
-
-                   <div className="flex-1 min-w-0">
-                     <div className="flex items-start justify-between gap-4">
-                       <div className="min-w-0">
-                         <div className="flex items-center gap-3">
-                           <h3 className="font-bold text-slate-800 truncate" title={name}>{name}</h3>
-                           <div className="ml-2">{t.subject ? <SubjectBadge subject={t.subject.name} /> : null}</div>
-                         </div>
-                         <div className="text-xs text-slate-500 mt-1 truncate">
-                           <span title={t.user?.email}><FaEnvelope className="inline mr-1 text-[10px]" /> {t.user?.email || "—"}</span>
-                           <span className="mx-2">•</span>
-                           <span title={t.user?.username}><FaIdCard className="inline mr-1 text-[10px]" /> {t.user?.username}</span>
-                         </div>
-                       </div>
-
-                       {/* Actions */}
-                       <div className="flex items-center gap-2">
-                         <button onClick={() => openModal(t)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition"><FaEdit /></button>
-                         <button onClick={() => handleDelete(t.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition"><FaTrash /></button>
-                       </div>
-                     </div>
-
-                     {/* Classes */}
-                     <div className="mt-2 flex items-center gap-2 text-xs text-slate-600">
-                       <FaUsers className="text-[12px]" />
-                       <div className="flex flex-wrap">
-                         {(t.classes || []).length > 0 ? (
-                           t.classes.map(c => <ClassTag key={c.id} name={c.name} />)
-                         ) : (
-                           <span className="text-xs text-slate-400 italic">Aucune classe</span>
-                         )}
-                       </div>
-                     </div>
-                   </div>
-                 </div>
-               );
-             })}
-           </div>
-        )}
-
-        {/* PAGINATION CONTROLS (bottom) */}
-        <div className="mt-6 flex items-center justify-between gap-4">
-          <div className="text-sm text-slate-600">{pageInfoText}</div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setPage(1)} disabled={page === 1} className="px-3 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">Début</button>
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="p-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">
-              <FaChevronLeft />
-            </button>
-            <div className="px-3 text-sm font-medium">Page {page} / {Math.max(1, totalPages)}</div>
-            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="p-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">
-              <FaChevronRight />
-            </button>
-            <button onClick={() => setPage(totalPages)} disabled={page === totalPages} className="px-3 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">Fin</button>
+          <div className="flex flex-col items-center justify-center py-24 gap-4" style={{ color:T.textMuted }}>
+            <FaSyncAlt style={{ width:28,height:28 }} className="animate-spin" />
+            <p className="text-sm font-medium">Chargement…</p>
           </div>
-        </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 rounded-2xl gap-4"
+            style={{ border:`2px dashed ${COL.from}44`, background:dark?COL.darkBg:COL.lightBg }}>
+            <FaChalkboardTeacher style={{ width:40,height:40,color:COL.from,opacity:0.4 }} />
+            <p className="font-black" style={{ color:T.textSecondary }}>
+              {search || filterSubj ? "Aucun résultat pour ces filtres" : "Aucun professeur enregistré"}
+            </p>
+            {!search && !filterSubj && (
+              <button onClick={() => setModal("create")}
+                className="mt-1 flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-black text-white transition-all active:scale-95"
+                style={{ background:`linear-gradient(135deg,${COL.from},${COL.to})`, boxShadow:`0 4px 12px ${COL.shadow}` }}>
+                <FaPlus style={{ width:12,height:12 }} /> Créer le premier professeur
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {filtered.map((t, i) => (
+              <TeacherCard key={t.id} teacher={t}
+                onEdit={(t) => setModal({ teacher:t })}
+                onDelete={setDelTarget}
+                style={{ animation:`fadeUp .35s ease-out ${i*30}ms both` }} />
+            ))}
+          </div>
+        )}
       </main>
 
-      {/* MODAL FORM */}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={currentTeacher ? "Modifier Enseignant" : "Nouvel Enseignant"}>
-         <div className="space-y-5">
-            {!currentTeacher && (
-               <div>
-                 <label className="label">Nom d'utilisateur</label>
-                 <input className="input" value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} placeholder="Auto si vide" />
-               </div>
-            )}
+      {modal === "create" && <TeacherModal subjects={subjects} onClose={() => setModal(null)} onSaved={load} setMsg={setMsg} />}
+      {modal?.teacher    && <TeacherModal teacher={modal.teacher} subjects={subjects} onClose={() => setModal(null)} onSaved={load} setMsg={setMsg} />}
+      {delTarget         && <DeleteModal  teacher={delTarget} onClose={() => setDelTarget(null)} onDeleted={load} setMsg={setMsg} />}
 
-            <div className="grid grid-cols-2 gap-4">
-               <div><label className="label">Prénom *</label><input className="input" value={formData.firstName} onChange={e => setFormData({...formData, firstName: e.target.value})} /></div>
-               <div><label className="label">Nom *</label><input className="input" value={formData.lastName} onChange={e => setFormData({...formData, lastName: e.target.value})} /></div>
-            </div>
-
-            <div><label className="label">Email *</label><input type="email" className="input" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} /></div>
-
-            <div className="grid grid-cols-1 gap-4">
-               <div>
-                  <label className="label">Matière enseignée</label>
-                  <select className="input" value={formData.subjectId} onChange={e => setFormData({...formData, subjectId: e.target.value})}>
-                     <option value="">-- Aucune --</option>
-                     {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-               </div>
-               <div>
-                  <label className="label">Classes attribuées</label>
-                  <select multiple className="input h-32 custom-scrollbar" value={formData.classIds} onChange={e => setFormData({...formData, classIds: Array.from(e.target.selectedOptions, o => Number(o.value))})}>
-                     {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                  <p className="text-xs text-slate-400 mt-1">Maintenez Ctrl (ou Cmd) pour sélectionner plusieurs classes.</p>
-               </div>
-            </div>
-
-            <div><label className="label">Mot de passe {currentTeacher && "(Optionnel)"}</label><input type="password" className="input" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} /></div>
-
-            <div className="pt-6 flex justify-end gap-3 border-t border-slate-100 mt-4">
-               <button onClick={() => setShowModal(false)} className="btn-secondary">Annuler</button>
-               <button onClick={handleSubmit} disabled={saving} className="btn-primary">{saving ? <FaSyncAlt className="animate-spin" /> : <FaCheck />} Enregistrer</button>
-            </div>
-         </div>
-      </Modal>
-
-      <style>{`
-        .label { @apply block text-xs font-bold text-slate-500 uppercase mb-1.5; }
-        .input { @apply w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition-all; }
-        .btn-primary { @apply bg-emerald-600 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg hover:bg-emerald-700 transition text-sm flex items-center gap-2 active:scale-95; }
-        .btn-secondary { @apply px-5 py-2.5 rounded-xl text-slate-600 hover:bg-slate-100 font-bold transition text-sm border border-transparent hover:border-slate-200; }
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-        @keyframes fadeIn { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: scale(1); } }
-        .animate-fadeIn { animation: fadeIn 0.2s ease-out forwards; }
+      <Toast msg={msg} onClose={() => setMsg(null)} />
+      <style>{BASE_KEYFRAMES}{`
+        .custom-scrollbar::-webkit-scrollbar { width:4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background:${COL.from}66; border-radius:10px; }
       `}</style>
     </div>
   );
+};
+
+const Teachers = () => {
+  const [dark, setDark] = useState(() => { try { return localStorage.getItem("scol360_dark")==="true"; } catch { return false; } });
+  const toggle = useCallback(() => { setDark((v) => { const n=!v; try{localStorage.setItem("scol360_dark",String(n));}catch{} return n; }); }, []);
+  return <ThemeCtx.Provider value={{ dark, toggle }}><TeachersInner /></ThemeCtx.Provider>;
 };
 
 export default Teachers;

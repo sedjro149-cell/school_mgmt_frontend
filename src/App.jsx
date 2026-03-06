@@ -20,6 +20,8 @@ import Absences from './pages/Absences';
 
 
 import GenerateTimetable from "./pages/GenerateTimetable";
+import TeacherClassAssignment from "./pages/TeacherClassAssignment";
+
 import Grades from "./pages/Grades";
 import GradesBulkEntry from "./pages/GradesBulkEntry";
 import ReportCards from "./pages/ReportCards";
@@ -62,6 +64,8 @@ function App() {
         <Route path="/finance/fees-statistics" element={<PrivateRoute element={<FeesStatistics />} />} />
         <Route path="/academics/anouncementmgmt" element={<PrivateRoute element={<AnnouncementManagement />} />} />
         <Route path="/academics/absences" element={<PrivateRoute element={<Absences />} />} />
+        <Route path="/academics/class-assignment" element={<PrivateRoute element={<TeacherClassAssignment />} />} />
+ 
 
 
         {/* 🔹 Redirection par défaut */}
