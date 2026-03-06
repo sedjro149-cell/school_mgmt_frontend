@@ -20,7 +20,7 @@ import Absences from './pages/Absences';
 
 
 import GenerateTimetable from "./pages/GenerateTimetable";
-import TeacherClassAssignment from "./pages/TeacherClassAssignment";
+import TeacherClassAssignment from "./pages/TeacherClassAssignments";
 
 import Grades from "./pages/Grades";
 import GradesBulkEntry from "./pages/GradesBulkEntry";
