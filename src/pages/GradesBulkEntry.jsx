@@ -1,650 +1,1281 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback, useLayoutEffect } from "react";
+// src/pages/GradeEntry.jsx
+// ─────────────────────────────────────────────────────────────────────────────
+//  SAISIE DES NOTES — Grille interactive avec autosave sur blur
+//  Bugs corrigés :
+//    • type="text" + onWheel blur → molette n'altère plus les valeurs
+//    • Autosave sur blur de cellule (pas debounce) → "15 ne devient plus 1"
+//    • gradesMapRef → jamais de closure périmée dans les fonctions de save
+//    • dirtySetRef (Set) → jamais de stale dirty check
+//    • ToastProvider externe supprimé → toast local
+// ─────────────────────────────────────────────────────────────────────────────
+import React, {
+  useCallback, useEffect, useLayoutEffect,
+  useMemo, useRef, useState, memo,
+} from "react";
+import {
+  FaCheck, FaExclamationTriangle, FaMoon, FaSun,
+  FaSave, FaSyncAlt, FaTable, FaUserGraduate,
+  FaTimes, FaChevronDown, FaClipboardList,
+  FaSpinner, FaChartBar,
+} from "react-icons/fa";
 import { fetchData, postData } from "./api";
-import { FaCheckCircle, FaExclamationTriangle, FaSave, FaSyncAlt, FaTable, FaUserGraduate } from "react-icons/fa";
+import {
+  ThemeCtx, useTheme, LIGHT, DARK,
+  SECTION_PALETTE, BASE_KEYFRAMES,
+} from "./theme";
 
-/* ---------------------------
-   Utilitaires (Inchangés mais essentiels)
-   --------------------------- */
-function gradeKey(studentId, subjectId) {
-  return `${String(studentId)}::${String(subjectId)}`;
-}
-function clampGradeValue(v) {
+const COL = SECTION_PALETTE.academic; // blue → cyan
+
+/* ──────────────────────────────────────────────────────────────
+   CONSTANTES
+────────────────────────────────────────────────────────────── */
+const GRADE_FIELDS = [
+  { key:"interrogation1", label:"I1", group:"interro" },
+  { key:"interrogation2", label:"I2", group:"interro" },
+  { key:"interrogation3", label:"I3", group:"interro" },
+  { key:"devoir1",        label:"D1", group:"devoir"  },
+  { key:"devoir2",        label:"D2", group:"devoir"  },
+];
+const TERMS = [
+  { v:"T1", color:"#3b82f6" },
+  { v:"T2", color:"#10b981" },
+  { v:"T3", color:"#f59e0b" },
+];
+
+/* ──────────────────────────────────────────────────────────────
+   UTILS
+────────────────────────────────────────────────────────────── */
+const gradeKey = (sid, subjId) => `${String(sid)}::${String(subjId)}`;
+
+const clampGrade = (v) => {
   if (v === "" || v === null || v === undefined) return null;
   const n = Number(v);
   if (Number.isNaN(n)) return null;
   return Math.max(0, Math.min(20, Math.round(n * 100) / 100));
-}
-function fmtNullable(n) {
-  return n == null ? "" : String(n);
-}
-function avg(nums) {
-  const vals = (nums || []).filter((x) => x != null && x !== "");
+};
+
+const fmtVal = (n) => (n == null ? "" : String(n));
+
+const calcAvg = (nums) => {
+  const vals = (nums || []).filter(x => x != null && x !== "");
   if (!vals.length) return null;
   return Math.round(vals.reduce((a, b) => a + Number(b), 0) / vals.length * 100) / 100;
-}
-function buildQuery(obj = {}) {
-  const parts = [];
-  Object.keys(obj).forEach((k) => {
-    const v = obj[k];
-    if (v === null || v === undefined || v === "") return;
-    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
-  });
+};
+
+const buildQuery = (obj = {}) => {
+  const parts = Object.entries(obj)
+    .filter(([, v]) => v != null && v !== "")
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
   return parts.length ? `?${parts.join("&")}` : "";
-}
-function handleApiError(err) {
-  const status = err?.status ?? (err && err.status) ?? null;
-  if (status === 401) {
-    try { localStorage.removeItem("access_token"); localStorage.removeItem("refresh_token"); } catch(e) {}
-    if (typeof window !== "undefined") window.location.href = "/login";
-  }
-}
+};
 
-/* ---------------------------
-   Toast Provider (Visuel amélioré)
-   --------------------------- */
-const ToastContext = React.createContext(null);
-export function ToastProvider({ children }) {
-  const [toasts, setToasts] = useState([]);
-  const push = useCallback(({ type = "info", title = "", text = "", timeout = 4000 }) => {
-    const id = Date.now() + Math.random();
-    setToasts((t) => [...t, { id, type, title, text }]);
-    if (timeout > 0) setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), timeout);
-  }, []);
+const buildPayload = (g, termArg) => {
+  const line = {
+    ...(g.id ? { id: g.id } : {}),
+    student_id: String(g.student_id),
+    subject_id: Number(g.subject_id),
+    term:        g.term || termArg,
+  };
+  GRADE_FIELDS.forEach(({ key }) => {
+    const v = g[key];
+    if (v !== null && v !== undefined) line[key] = clampGrade(v);
+  });
+  return line;
+};
+
+const colorForGrade = (v) => {
+  if (v == null) return null;
+  if (v >= 16) return "#10b981";
+  if (v >= 10) return "#3b82f6";
+  if (v >= 8)  return "#f59e0b";
+  return "#ef4444";
+};
+
+/* ──────────────────────────────────────────────────────────────
+   ATOMES UI
+────────────────────────────────────────────────────────────── */
+const DarkToggle = () => {
+  const { dark, toggle } = useTheme();
+  const [hov, setHov] = useState(false);
   return (
-    <ToastContext.Provider value={{ push }}>
-      {children}
-      <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-3 max-w-sm pointer-events-none">
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className={`pointer-events-auto flex items-start gap-3 p-4 rounded-xl shadow-lg border transform transition-all animate-slideUp
-              ${t.type === "success" ? "bg-emerald-50 border-emerald-200 text-emerald-900" : t.type === "error" ? "bg-rose-50 border-rose-200 text-rose-900" : "bg-white border-gray-200 text-slate-800"}`}
-          >
-            <div className="flex-1">
-              {t.title && <div className="font-bold text-sm mb-1">{t.title}</div>}
-              <div className="text-xs opacity-90 leading-relaxed">{t.text}</div>
-            </div>
-            <button onClick={() => setToasts((s) => s.filter((x) => x.id !== t.id))} className="text-current opacity-50 hover:opacity-100">✕</button>
-          </div>
-        ))}
+    <button onClick={toggle}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{
+        position:"relative", width:52, height:28, borderRadius:999,
+        border:"none", cursor:"pointer", flexShrink:0, outline:"none", transition:"all .3s",
+        background: dark ? "linear-gradient(135deg,#6366f1,#8b5cf6)"
+          : `linear-gradient(135deg,${COL.from},${COL.to})`,
+        boxShadow: hov ? `0 0 18px ${COL.shadow}` : "0 2px 8px rgba(0,0,0,.2)",
+      }}>
+      <div style={{
+        position:"absolute", top:2, width:24, height:24, borderRadius:999,
+        background:"#fff", display:"flex", alignItems:"center", justifyContent:"center",
+        transition:"all .3s", left: dark ? "calc(100% - 26px)" : 2,
+        boxShadow:"0 2px 6px rgba(0,0,0,.25)",
+      }}>
+        {dark ? <FaMoon style={{ width:11,height:11,color:"#6366f1" }} />
+               : <FaSun  style={{ width:11,height:11,color:COL.from  }} />}
       </div>
-    </ToastContext.Provider>
+    </button>
   );
-}
+};
 
-/* ---------------------------
-   Result Modal (Redesign)
-   --------------------------- */
-function ResultModal({ open, onClose, results }) {
-  if (!open) return null;
+const Toast = ({ msg, onClose }) => {
+  useEffect(() => {
+    if (msg) { const t = setTimeout(onClose, 4500); return () => clearTimeout(t); }
+  }, [msg]);
+  if (!msg) return null;
+  const isErr = msg.type === "error";
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
-      <div className="w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
-        <div className="px-6 py-4 border-b bg-slate-50 flex justify-between items-center">
-          <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><FaTable className="text-indigo-500"/> Rapport de Sauvegarde</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+    <div onClick={onClose} style={{
+      position:"fixed", bottom:24, right:24, zIndex:350,
+      display:"flex", alignItems:"center", gap:10, padding:"13px 18px",
+      borderRadius:14, cursor:"pointer", fontWeight:700, fontSize:12, color:"#fff",
+      animation:"slideUp .3s cubic-bezier(.34,1.56,.64,1)", maxWidth:380,
+      background: isErr ? "linear-gradient(135deg,#ef4444,#dc2626)"
+        : `linear-gradient(135deg,${COL.from},${COL.to})`,
+      boxShadow: isErr ? "0 8px 24px #ef444444" : `0 8px 24px ${COL.shadow}`,
+    }}>
+      {isErr ? <FaExclamationTriangle style={{ flexShrink:0,width:13,height:13 }} />
+             : <FaCheck style={{ flexShrink:0,width:13,height:13 }} />}
+      {msg.text}
+    </div>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────
+   MODAL RÉSULTATS SAUVEGARDE
+────────────────────────────────────────────────────────────── */
+const ResultModal = ({ open, onClose, results }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+  if (!open) return null;
+
+  const counts = { created:0, updated:0, error:0 };
+  (results || []).forEach(r => { if (counts[r.status] !== undefined) counts[r.status]++; });
+
+  return (
+    <div style={{
+      position:"fixed", inset:0, zIndex:200,
+      background:"rgba(0,0,0,0.55)", backdropFilter:"blur(6px)",
+      display:"flex", alignItems:"center", justifyContent:"center",
+      padding:16, animation:"fadeIn .18s ease-out",
+    }}>
+      <div style={{
+        width:"100%", maxWidth:700, maxHeight:"82vh",
+        display:"flex", flexDirection:"column",
+        background:T.cardBg, borderRadius:18, overflow:"hidden",
+        boxShadow:"0 32px 80px rgba(0,0,0,.35)",
+        animation:"panelUp .22s cubic-bezier(.34,1.4,.64,1)",
+        border:`1.5px solid ${T.cardBorder}`,
+      }}>
+        <div style={{ height:4, background:`linear-gradient(90deg,${COL.from},${COL.to})`, flexShrink:0 }} />
+
+        {/* Header */}
+        <div style={{
+          display:"flex", alignItems:"center", gap:10, padding:"14px 18px",
+          borderBottom:`1px solid ${T.divider}`, flexShrink:0,
+        }}>
+          <div style={{
+            width:32, height:32, borderRadius:9,
+            display:"flex", alignItems:"center", justifyContent:"center",
+            background:`linear-gradient(135deg,${COL.from},${COL.to})`,
+            boxShadow:`0 4px 12px ${COL.shadow}`,
+          }}>
+            <FaClipboardList style={{ width:13,height:13,color:"#fff" }} />
+          </div>
+          <div style={{ flex:1 }}>
+            <p style={{ fontSize:14, fontWeight:800, color:T.textPrimary }}>
+              Rapport de sauvegarde
+            </p>
+            <p style={{ fontSize:10, color:T.textMuted, marginTop:1 }}>
+              {counts.created} créé{counts.created!==1?"s":""} · {counts.updated} mis à jour · {counts.error} erreur{counts.error!==1?"s":""}
+            </p>
+          </div>
+          {/* Mini stats */}
+          <div style={{ display:"flex", gap:6 }}>
+            {[
+              { label:"Créés",     val:counts.created, color:"#10b981" },
+              { label:"Maj",       val:counts.updated, color:`${COL.from}` },
+              { label:"Erreurs",   val:counts.error,   color:"#ef4444" },
+            ].map(({ label, val, color }) => (
+              <div key={label} style={{
+                textAlign:"center", padding:"4px 10px", borderRadius:8,
+                background:`${color}15`, border:`1px solid ${color}33`,
+              }}>
+                <p style={{ fontSize:14, fontWeight:900, color, lineHeight:1 }}>{val}</p>
+                <p style={{ fontSize:8, fontWeight:700, color, textTransform:"uppercase",
+                  letterSpacing:"0.06em", marginTop:2 }}>{label}</p>
+              </div>
+            ))}
+          </div>
+          <button onClick={onClose}
+            style={{
+              width:28, height:28, borderRadius:7, border:"none", cursor:"pointer",
+              background:"transparent", color:T.textMuted,
+              display:"flex", alignItems:"center", justifyContent:"center",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background="#ef444422"; e.currentTarget.style.color="#ef4444"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background="transparent"; e.currentTarget.style.color=T.textMuted; }}>
+            <FaTimes style={{ width:11,height:11 }} />
+          </button>
         </div>
-        <div className="p-0 overflow-auto flex-1 custom-scrollbar">
-          <table className="w-full text-sm text-left">
-            <thead className="bg-slate-100 text-slate-500 font-semibold uppercase text-xs sticky top-0">
-              <tr>
-                <th className="px-6 py-3">Élève</th>
-                <th className="px-6 py-3">Matière</th>
-                <th className="px-6 py-3">État</th>
-                <th className="px-6 py-3">Détail</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {(!results || results.length === 0) ? (
-                <tr><td colSpan="4" className="px-6 py-8 text-center text-slate-400 italic">Aucune opération effectuée.</td></tr>
-              ) : results.map((r, i) => (
-                <tr key={i} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-6 py-3 font-medium text-slate-700">{r.student_label || `ID ${r.student_id}`}</td>
-                  <td className="px-6 py-3 text-slate-600">{r.subject_label || `ID ${r.subject_id}`}</td>
-                  <td className="px-6 py-3">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize
-                      ${r.status === "created" ? "bg-emerald-100 text-emerald-800" : 
-                        r.status === "updated" ? "bg-blue-100 text-blue-800" : "bg-red-100 text-red-800"}`}>
-                      {r.status === 'created' ? 'Créé' : r.status === 'updated' ? 'Mis à jour' : 'Erreur'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3 text-slate-500 truncate max-w-xs" title={r.message}>{r.message || JSON.stringify(r.errors) || "-"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+
+        {/* Tableau */}
+        <div style={{
+          flex:1, overflowY:"auto",
+          scrollbarWidth:"thin", scrollbarColor:`${COL.from} transparent`,
+        }}>
+          {/* En-tête tableau */}
+          <div style={{
+            display:"grid", gridTemplateColumns:"1fr 1fr 100px 1fr",
+            gap:0, padding:"8px 16px",
+            position:"sticky", top:0, zIndex:10,
+            background:T.tableHead, borderBottom:`1px solid ${T.divider}`,
+          }}>
+            {["Élève","Matière","État","Détail"].map((h, i) => (
+              <p key={i} style={{
+                fontSize:9, fontWeight:800, textTransform:"uppercase",
+                letterSpacing:"0.08em", color:T.textMuted,
+              }}>{h}</p>
+            ))}
+          </div>
+
+          {(!results || results.length === 0) ? (
+            <div style={{ padding:"32px 16px", textAlign:"center" }}>
+              <p style={{ fontSize:12, color:T.textMuted, fontStyle:"italic" }}>
+                Aucune opération effectuée.
+              </p>
+            </div>
+          ) : results.map((r, i) => {
+            const isErr = r.status === "error";
+            const isNew = r.status === "created";
+            const color = isErr ? "#ef4444" : isNew ? "#10b981" : COL.from;
+            const label = isErr ? "Erreur" : isNew ? "Créé" : "Mis à jour";
+            return (
+              <div key={i} style={{
+                display:"grid", gridTemplateColumns:"1fr 1fr 100px 1fr",
+                gap:0, padding:"10px 16px",
+                borderBottom:`1px solid ${T.divider}`,
+                background: i%2===0 ? "transparent" : (dark?"rgba(255,255,255,0.015)":"rgba(0,0,0,0.01)"),
+              }}>
+                <p style={{ fontSize:11, fontWeight:600, color:T.textPrimary }}>
+                  {r.student_label || `ID ${r.student_id}`}
+                </p>
+                <p style={{ fontSize:11, color:T.textSecondary }}>
+                  {r.subject_label || `ID ${r.subject_id}`}
+                </p>
+                <div>
+                  <span style={{
+                    display:"inline-block", padding:"2px 9px", borderRadius:999,
+                    fontSize:9, fontWeight:800, textTransform:"uppercase",
+                    background:`${color}18`, color, border:`1px solid ${color}33`,
+                  }}>
+                    {label}
+                  </span>
+                </div>
+                <p style={{
+                  fontSize:10, color:T.textMuted, overflow:"hidden",
+                  textOverflow:"ellipsis", whiteSpace:"nowrap",
+                }}>
+                  {r.message || (r.errors ? JSON.stringify(r.errors) : "—")}
+                </p>
+              </div>
+            );
+          })}
         </div>
-        <div className="p-4 border-t bg-slate-50 flex justify-end">
-          <button onClick={onClose} className="px-6 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg font-medium transition shadow-sm">Fermer</button>
+
+        <div style={{
+          padding:"12px 18px", borderTop:`1px solid ${T.divider}`,
+          display:"flex", justifyContent:"flex-end", flexShrink:0,
+        }}>
+          <button onClick={onClose}
+            style={{
+              padding:"9px 24px", borderRadius:10, border:"none", cursor:"pointer",
+              fontSize:12, fontWeight:800, color:"#fff",
+              background:`linear-gradient(135deg,${COL.from},${COL.to})`,
+              boxShadow:`0 4px 12px ${COL.shadow}`,
+            }}>
+            Fermer
+          </button>
         </div>
       </div>
     </div>
   );
-}
+};
 
-/* ---------------------------
-   Grades Component
-   --------------------------- */
-export default function Grades() {
-  const toast = React.useContext(ToastContext);
-  const [classes, setClasses] = useState([]);
-  const [selectedClassId, setSelectedClassId] = useState("");
-  const [subjects, setSubjects] = useState([]);
-  const [students, setStudents] = useState([]);
-  const [term, setTerm] = useState("T1");
-  const [loading, setLoading] = useState(false);
-  const [subjectsNote, setSubjectsNote] = useState(null);
-  
-  // State for grades logic
-  const [gradesMap, setGradesMap] = useState({});
+/* ──────────────────────────────────────────────────────────────
+   GRADE CELL — Mémoïsé, autosave sur blur de la cellule entière
+   ─────────────────────────────────────────────────────────────
+   BUG FIX #1 : type="text" + onWheel → plus de modification par molette
+   BUG FIX #2 : onBlur sur le container (relatedTarget check) → autosave
+                uniquement quand focus QUITTE la cellule, pas entre champs
+────────────────────────────────────────────────────────────── */
+const GradeCell = memo(function GradeCell({
+  studentId, subjectId,
+  gradeData, errors, isDirty, isSaving,
+  onFieldChange, onCellBlur,
+}) {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+
+  const g    = gradeData || {};
+  const errs = errors    || {};
+  const hasErrors = Object.keys(errs).length > 0;
+
+  const avgI   = calcAvg([g.interrogation1, g.interrogation2, g.interrogation3]);
+  const avgD   = calcAvg([g.devoir1, g.devoir2]);
+  const avgTot = calcAvg([g.interrogation1, g.interrogation2, g.interrogation3, g.devoir1, g.devoir2]);
+  const avgColor = colorForGrade(avgTot);
+
+  /* BUG FIX #2 : blur du CONTENEUR, pas de chaque input individuel */
+  const handleContainerBlur = (e) => {
+    /* Ne sauvegarder que si focus quitte la cellule entière */
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      onCellBlur(studentId, subjectId);
+    }
+  };
+
+  return (
+    <div
+      onBlur={handleContainerBlur}
+      style={{
+        padding:"8px", borderRadius:11, transition:"all .15s", position:"relative",
+        background: hasErrors
+          ? (dark?"rgba(239,68,68,0.08)":"rgba(239,68,68,0.04)")
+          : isDirty
+            ? (dark?"rgba(245,158,11,0.08)":"rgba(245,158,11,0.04)")
+            : "transparent",
+        border:`1.5px solid ${
+          hasErrors ? "#ef444444" : isDirty ? "#f59e0b44" : T.cardBorder
+        }`,
+        minWidth:220,
+      }}>
+
+      {/* Indicateur d'état */}
+      <div style={{
+        position:"absolute", top:7, right:7,
+        display:"flex", alignItems:"center", gap:3,
+      }}>
+        {isSaving && (
+          <FaSyncAlt style={{
+            width:8,height:8, color:COL.from,
+            animation:"spin 1s linear infinite",
+          }} />
+        )}
+        {!isSaving && (
+          <div style={{
+            width:5, height:5, borderRadius:999,
+            background: hasErrors ? "#ef4444" : isDirty ? "#f59e0b" : "#10b98166",
+            opacity: isDirty || hasErrors ? 1 : 0.3,
+            transition:"all .2s",
+          }} title={hasErrors?"Erreur saisie":isDirty?"Non sauvegardé":"À jour"} />
+        )}
+      </div>
+
+      {/* Labels groupes */}
+      <div style={{
+        display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:3, marginBottom:3,
+      }}>
+        {GRADE_FIELDS.map(({ key, label, group }) => (
+          <p key={key} style={{
+            fontSize:8, fontWeight:800, textAlign:"center", textTransform:"uppercase",
+            letterSpacing:"0.05em",
+            color: group==="interro" ? COL.from : "#f97316",
+          }}>
+            {label}
+          </p>
+        ))}
+      </div>
+
+      {/* Inputs ──────────────────────────────────────────────
+          BUG FIX #1 :
+          • type="text"  → le navigateur ne capte plus la molette
+          • inputMode="decimal" → clavier numérique sur mobile
+          • onWheel={(e) => e.currentTarget.blur()} → ceinture + bretelles
+      ─────────────────────────────────────────────────────── */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:3 }}>
+        {GRADE_FIELDS.map(({ key, group }) => {
+          const hasErr = !!errs[key];
+          const ac = group === "interro" ? COL.from : "#f97316";
+          return (
+            <input
+              key={key}
+              type="text"
+              inputMode="decimal"
+              pattern="[0-9.]*"
+              value={fmtVal(g[key])}
+              placeholder="—"
+              /* ────── BUG FIX #1 : molette ────── */
+              onWheel={(e) => e.currentTarget.blur()}
+              onChange={(e) => onFieldChange(studentId, subjectId, key, e.target.value)}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = hasErr ? "#ef4444" : ac;
+                e.currentTarget.style.boxShadow   = `0 0 0 3px ${hasErr?"#ef444422":ac+"22"}`;
+                /* Sélectionner le contenu pour faciliter la ressaisie */
+                e.currentTarget.select();
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = hasErr ? "#ef444455" : T.inputBorder;
+                e.currentTarget.style.boxShadow   = "none";
+              }}
+              style={{
+                width:"100%", boxSizing:"border-box",
+                textAlign:"center", fontSize:12, fontWeight:700,
+                padding:"6px 2px", borderRadius:7, outline:"none", transition:"all .15s",
+                background: hasErr
+                  ? (dark?"rgba(239,68,68,0.15)":"rgba(239,68,68,0.07)")
+                  : T.inputBg,
+                color: hasErr ? "#ef4444" : T.textPrimary,
+                border:`1.5px solid ${hasErr?"#ef444455":T.inputBorder}`,
+                fontFamily:"'Plus Jakarta Sans', sans-serif",
+              }}
+            />
+          );
+        })}
+      </div>
+
+      {/* Moyennes */}
+      <div style={{
+        display:"flex", alignItems:"center", justifyContent:"space-between",
+        marginTop:6, paddingTop:5, borderTop:`1px solid ${T.divider}`,
+        gap:4,
+      }}>
+        <div style={{ display:"flex", gap:6 }}>
+          {avgI !== null && (
+            <span style={{
+              fontSize:9, fontWeight:700, color:T.textMuted,
+              display:"flex", alignItems:"center", gap:2,
+            }}>
+              <span style={{ color:COL.from, fontSize:8 }}>I̅</span>
+              <span style={{ color:colorForGrade(avgI)||T.textSecondary, fontWeight:800 }}>
+                {avgI}
+              </span>
+            </span>
+          )}
+          {avgD !== null && (
+            <span style={{
+              fontSize:9, fontWeight:700, color:T.textMuted,
+              display:"flex", alignItems:"center", gap:2,
+            }}>
+              <span style={{ color:"#f97316", fontSize:8 }}>D̅</span>
+              <span style={{ color:colorForGrade(avgD)||T.textSecondary, fontWeight:800 }}>
+                {avgD}
+              </span>
+            </span>
+          )}
+        </div>
+        {avgTot !== null && (
+          <div style={{
+            padding:"2px 9px", borderRadius:999, fontSize:10, fontWeight:900,
+            background: avgColor ? `${avgColor}18` : T.inputBg,
+            color: avgColor || T.textMuted,
+            border:`1px solid ${avgColor ? avgColor+"33" : T.cardBorder}`,
+          }}>
+            {avgTot}
+          </div>
+        )}
+      </div>
+
+      {/* Erreur saisie */}
+      {hasErrors && (
+        <div style={{
+          marginTop:5, display:"flex", alignItems:"center", gap:4,
+          padding:"3px 7px", borderRadius:6,
+          background:"#ef444415", border:"1px solid #ef444433",
+        }}>
+          <FaExclamationTriangle style={{ width:8,height:8,color:"#ef4444",flexShrink:0 }} />
+          <p style={{ fontSize:9, color:"#ef4444", fontWeight:700 }}>
+            {Object.values(errs)[0]}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+});
+
+/* ──────────────────────────────────────────────────────────────
+   COMPOSANT PRINCIPAL
+────────────────────────────────────────────────────────────── */
+const GradesInner = () => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+
+  /* ── Data ── */
+  const [classes,    setClasses]    = useState([]);
+  const [students,   setStudents]   = useState([]);
+  const [subjects,   setSubjects]   = useState([]);
+  const [loading,    setLoading]    = useState(false);
+  const [subNote,    setSubNote]    = useState(null);
+
+  /* ── Sélecteurs ── */
+  const [classId, setClassId] = useState("");
+  const [term,    setTerm]    = useState("T1");
+
+  /* ── Grades ── */
+  const [gradesMap,  setGradesMap]  = useState({});
   const [cellErrors, setCellErrors] = useState({});
-  const cellErrorsRef = useRef(cellErrors);
+  const [dirtyMap,   setDirtyMap]   = useState({});
+  const [savingMap,  setSavingMap]  = useState({});
+
+  /* ── Refs anti-stale-closure ── */
+  const gradesMapRef   = useRef(gradesMap);
+  const cellErrorsRef  = useRef(cellErrors);
+  const dirtySetRef    = useRef(new Set());   // ← BUG FIX #2 : Set toujours à jour
+  const termRef        = useRef(term);
+  useEffect(() => { gradesMapRef.current  = gradesMap;  }, [gradesMap]);
   useEffect(() => { cellErrorsRef.current = cellErrors; }, [cellErrors]);
-  const [dirtyMap, setDirtyMap] = useState({});
-  
-  // Save Results
-  const [resultModalOpen, setResultModalOpen] = useState(false);
-  const [saveResults, setSaveResults] = useState([]);
+  useEffect(() => { termRef.current       = term;       }, [term]);
 
-  // Refs
-  const savingRef = useRef({});
-  const timersRef = useRef({});
-  const isBulkSavingRef = useRef(false);
-  const isReloadingRef = useRef(false);
-  const headerRef = useRef(null);
-  const [headerHeight, setHeaderHeight] = useState(0);
+  /* ── UI ── */
+  const [msg,           setMsg]           = useState(null);
+  const [resultOpen,    setResultOpen]    = useState(false);
+  const [saveResults,   setSaveResults]   = useState([]);
+  const headerRef   = useRef(null);
+  const [headerH,   setHeaderH]   = useState(0);
+  const pendingCount = Object.keys(dirtyMap).length;
 
-  /* --- Load Classes --- */
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await fetchData("academics/school-classes/");
-        setClasses(Array.isArray(data) ? data : []);
-      } catch (e) {
-        handleApiError(e);
-        toast.push({ type: "error", title: "Erreur", text: "Impossible de charger les classes." });
-      }
-    })();
-    return () => Object.values(timersRef.current).forEach(clearTimeout);
-  }, []);
+  const toast = (type, text) => setMsg({ type, text });
 
-  // Measure header for sticky positioning
+  /* ── Measure header ── */
   useLayoutEffect(() => {
     const measure = () => {
-      if (headerRef.current) setHeaderHeight(headerRef.current.getBoundingClientRect().height);
+      if (headerRef.current) setHeaderH(headerRef.current.getBoundingClientRect().height);
     };
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
 
-  /* --- Main Data Loader --- */
+  /* ── Chargement classes ── */
   useEffect(() => {
-    if (!selectedClassId) {
-      setStudents([]); setSubjects([]); setGradesMap({}); setSubjectsNote(null); return;
-    }
-    reloadAllForClass(selectedClassId, term);
-  }, [selectedClassId, term]);
+    (async () => {
+      try {
+        const data = await fetchData("/academics/school-classes/");
+        setClasses(Array.isArray(data) ? data : data?.results ?? []);
+      } catch { toast("error", "Impossible de charger les classes."); }
+    })();
+  }, []);
 
-  const reloadAllForClass = useCallback(async (classId, termArg) => {
-    isReloadingRef.current = true;
-    setLoading(true);
-    setSubjectsNote(null);
-    
+  /* ── Rechargement principal ── */
+  const reloadClass = useCallback(async (cId, termArg) => {
+    if (!cId) return;
+    setLoading(true); setSubNote(null);
+    setStudents([]); setSubjects([]); setGradesMap({});
+    setCellErrors({}); setDirtyMap({});
+    dirtySetRef.current.clear();
+
     try {
-      // 1. Students
-      const stData = await fetchData(`core/admin/students/by-class/${classId}/`);
+      /* 1. Élèves */
+      const stData = await fetchData(`/core/admin/students/by-class/${cId}/`);
       setStudents(Array.isArray(stData) ? stData : []);
 
-      // 2. Subjects
-      let normalizedSubjects = [];
+      /* 2. Matières */
+      let normalizedSubs = [];
       try {
-        const subRes = await fetchData(`academics/class-subjects/by-class/${classId}/`);
-        const rawSubjects = Array.isArray(subRes) ? subRes : [];
-        if (!rawSubjects.length) {
-          setSubjects([]);
-          setSubjectsNote("Aucune matière configurée pour cette classe.");
+        const subRes = await fetchData(`/academics/class-subjects/by-class/${cId}/`);
+        const raw = Array.isArray(subRes) ? subRes : [];
+        if (!raw.length) {
+          setSubNote("Aucune matière configurée pour cette classe.");
         } else {
-          normalizedSubjects = rawSubjects.map((s) => {
-            const subjectObj = s.subject || null;
-            const subject_id = subjectObj?.id ?? s.subject_id ?? s.subject?.subject?.id ?? null;
+          normalizedSubs = raw.map(s => {
+            const subObj = s.subject || null;
+            const subject_id = subObj?.id ?? s.subject_id ?? null;
             return {
-              id: s.id,
-              displayName: (s.name && String(s.name).trim()) || subjectObj?.name || s.subject_name || `Matière #${s.id}`,
-              subject_id: subject_id,
-              raw: s
+              id:          s.id,
+              displayName: s.name?.trim() || subObj?.name || s.subject_name || `Matière #${s.id}`,
+              subject_id,
+              raw:         s,
             };
           });
-          setSubjects(normalizedSubjects);
+          setSubjects(normalizedSubs);
         }
-      } catch (err) {
-        handleApiError(err);
-        setSubjectsNote("Impossible de charger les matières.");
-      }
+      } catch { setSubNote("Impossible de charger les matières."); }
 
-      // Lookup Maps
-      const subjectLookupBySubjectId = {};
-      normalizedSubjects.forEach(s => { if(s.subject_id != null) subjectLookupBySubjectId[String(s.subject_id)] = s; });
-
-      // 3. Grades
+      /* 3. Notes */
       try {
-        const query = buildQuery({ school_class: classId, term: termArg });
-        const gres = await fetchData(`academics/grades/${query}`);
+        const q = buildQuery({ school_class: cId, term: termArg });
+        const gres = await fetchData(`/academics/grades/${q}`);
         const newMap = {};
-        
-        (gres || []).forEach((g) => {
-          const sidRaw = g.student_id ?? (g.student?.id) ?? null;
-          const subidRaw = g.subject_id ?? (g.subject?.id) ?? null;
-          if (!sidRaw || !subidRaw) return;
-          
-          const key = gradeKey(String(sidRaw), String(subidRaw));
+        (gres || []).forEach(g => {
+          const sid   = g.student_id  ?? g.student?.id  ?? null;
+          const subid = g.subject_id  ?? g.subject?.id  ?? null;
+          if (!sid || !subid) return;
+          const key = gradeKey(String(sid), String(subid));
           newMap[key] = {
             ...g,
-            student_id: String(sidRaw),
-            subject_id: String(subidRaw),
+            student_id:    String(sid),
+            subject_id:    String(subid),
             interrogation1: g.interrogation1 != null ? Number(g.interrogation1) : null,
             interrogation2: g.interrogation2 != null ? Number(g.interrogation2) : null,
             interrogation3: g.interrogation3 != null ? Number(g.interrogation3) : null,
-            devoir1: g.devoir1 != null ? Number(g.devoir1) : null,
-            devoir2: g.devoir2 != null ? Number(g.devoir2) : null,
+            devoir1:        g.devoir1        != null ? Number(g.devoir1)        : null,
+            devoir2:        g.devoir2        != null ? Number(g.devoir2)        : null,
           };
         });
-
         setGradesMap(newMap);
-        setCellErrors({});
-        setDirtyMap({});
-      } catch (err) {
-        handleApiError(err);
-        toast.push({ type: "error", title: "Erreur", text: "Erreur chargement notes." });
-      }
-    } catch (err) {
-      handleApiError(err);
-      toast.push({ type: "error", title: "Fatal", text: "Impossible de charger les données." });
-    } finally {
-      setLoading(false);
-      isReloadingRef.current = false;
-    }
-  }, [toast]);
+        gradesMapRef.current = newMap;
+      } catch { toast("error", "Erreur lors du chargement des notes."); }
 
-  const visibleSubjects = useMemo(() => subjects || [], [subjects]);
-  const cellHasAnyErrors = useCallback((key) => !!cellErrorsRef.current[key] && Object.keys(cellErrorsRef.current[key]).length > 0, []);
+    } catch { toast("error", "Impossible de charger les données de la classe."); }
+    finally  { setLoading(false); }
+  }, []);
 
-  /* --- Input Handlers --- */
-  const setGradeCell = useCallback((studentId, subjectId, field, raw) => {
-    const key = gradeKey(studentId, subjectId);
+  useEffect(() => { reloadClass(classId, term); }, [classId, term, reloadClass]);
+
+  /* ──────────────────────────────────────────────────────────
+     BUG FIX CORE :
+     handleFieldChange — mise à jour locale SANS déclencher de save
+     handleCellBlur   — déclenche le save uniquement quand focus quitte la cellule
+  ────────────────────────────────────────────────────────── */
+  const handleFieldChange = useCallback((studentId, subjectId, field, raw) => {
+    const key    = gradeKey(String(studentId), String(subjectId));
     const parsed = raw === "" ? null : parseFloat(raw);
 
-    setGradesMap((prev) => {
-      const existing = prev[key] || { id: null, student_id: String(studentId), subject_id: String(subjectId), term };
-      return { ...prev, [key]: { ...existing, [field]: parsed, term } };
-    });
-    setDirtyMap((d) => ({ ...d, [key]: true }));
-
+    /* Validation */
     let err = null;
-    if (parsed !== null) {
-      if (Number.isNaN(parsed)) err = "Numérique requis";
-      else if (parsed < 0 || parsed > 20) err = "0-20";
+    if (raw !== "" && raw !== null) {
+      if (Number.isNaN(parsed))          err = "Valeur numérique requise";
+      else if (parsed < 0 || parsed > 20) err = "La note doit être entre 0 et 20";
     }
 
-    setCellErrors((errs) => {
-      const copy = { ...errs };
+    /* Mise à jour grade map */
+    setGradesMap(prev => {
+      const existing = prev[key] || {
+        id: null,
+        student_id: String(studentId),
+        subject_id: String(subjectId),
+        term: termRef.current,
+      };
+      const updated = { ...existing, [field]: parsed, term: termRef.current };
+      gradesMapRef.current = { ...gradesMapRef.current, [key]: updated };
+      return gradesMapRef.current;
+    });
+
+    /* Erreurs */
+    setCellErrors(prev => {
+      const copy = { ...prev };
       const cellErr = copy[key] ? { ...copy[key] } : {};
       if (err) cellErr[field] = err; else delete cellErr[field];
-      if (!Object.keys(cellErr).length) delete copy[key]; else copy[key] = cellErr;
-      return copy;
+      const newCell = { ...copy, [key]: cellErr };
+      if (!Object.keys(cellErr).length) delete newCell[key];
+      cellErrorsRef.current = newCell;
+      return newCell;
     });
 
-    // Debounced Autosave
-    try { clearTimeout(timersRef.current[key]); } catch (e) {}
-    if (isBulkSavingRef.current || isReloadingRef.current) return;
-    
-    timersRef.current[key] = setTimeout(() => {
-      if (!cellHasAnyErrors(key) && dirtyMap[key]) {
-        saveSingleGrade(key).catch(() => {});
-      }
-      delete timersRef.current[key];
-    }, 2000); // 2s autosave
-  }, [dirtyMap, cellHasAnyErrors, term]); // Added term to dependencies if needed, though handled in effect
+    /* Marquer dirty */
+    dirtySetRef.current.add(key);           // ref — toujours à jour
+    setDirtyMap(d => ({ ...d, [key]: true })); // state — pour UI
+  }, []); // deps vides : utilise uniquement des refs et setters stables
 
-  /* --- Save Logic (Single & Bulk) --- */
-  async function saveSingleGrade(key) {
-    if (savingRef.current[key]) return savingRef.current[key];
-    const g = gradesMap[key];
+  /* ── Save une cellule ── */
+  const saveSingleGrade = useCallback(async (key) => {
+    /* Lire depuis la REF — jamais périmé */
+    const g = gradesMapRef.current[key];
     if (!g) return;
 
-    const student_id = String(g.student_id ?? key.split("::")[0]);
-    const subject_id_key = String(g.subject_id ?? key.split("::")[1]);
+    const hasErr = cellErrorsRef.current[key] &&
+      Object.keys(cellErrorsRef.current[key]).length > 0;
+    if (hasErr) return;
 
-    const payloadLine = {
-      ...(g.id ? { id: g.id } : {}),
-      student_id, subject_id: Number(subject_id_key), term: g.term || term,
-    };
-    ["interrogation1", "interrogation2", "interrogation3", "devoir1", "devoir2"].forEach(f => {
-        const v = g[f];
-        if(v !== null && v !== undefined) payloadLine[f] = clampGradeValue(v);
-    });
+    setSavingMap(s => ({ ...s, [key]: true }));
+    try {
+      const payload = buildPayload(g, termRef.current);
+      const data = await postData("/academics/grades/bulk_upsert/", [payload]);
+      const r    = (Array.isArray(data?.results) ? data.results : [])[0];
 
-    const act = async () => {
-        try {
-            const data = await postData(`academics/grades/bulk_upsert/`, [payloadLine]);
-            const r = (Array.isArray(data.results) ? data.results : [])[0];
-            
-            if(r && r.status !== 'error') {
-                setGradesMap(p => ({ ...p, [key]: { ...p[key], id: r.id || p[key].id } }));
-                setDirtyMap(d => { const c = {...d}; delete c[key]; return c; });
-                // Optional: silent success or small indicator
-            } else if (r && r.status === 'error') {
-                setCellErrors(p => ({...p, [key]: r.errors || { server: "Erreur" } }));
-            }
-        } catch(e) { console.error(e); }
-    };
-    const p = act();
-    savingRef.current[key] = p;
-    return p;
-  }
-
-  function buildPayloadLine(studentId, subjectId) {
-    const key = gradeKey(studentId, subjectId);
-    const g = gradesMap[key] || { id: null, student_id: String(studentId), subject_id: String(subjectId) };
-    const line = {
-      ...(g.id ? { id: g.id } : {}),
-      student_id: String(g.student_id ?? studentId),
-      subject_id: Number(g.subject_id ?? subjectId),
-      term: g.term || term,
-    };
-    ["interrogation1", "interrogation2", "interrogation3", "devoir1", "devoir2"].forEach(f => {
-       const v = g[f];
-       if (v !== null && v !== undefined) line[f] = clampGradeValue(v);
-    });
-    return line;
-  }
-
-  const handleSaveAll = useCallback(async () => {
-    setSaveResults([]);
-    const toCreate = [];
-    students.forEach(stu => {
-        visibleSubjects.forEach(sub => {
-            const subjKeyId = sub.subject_id != null ? sub.subject_id : sub.id;
-            const key = gradeKey(stu.id, subjKeyId);
-            if(cellHasAnyErrors(key)) {
-                setSaveResults(s => [...s, { student_label: stu.user?.last_name, subject_label: sub.displayName, status: "error", message: "Erreur de validation locale" }]);
-                return;
-            }
-            const g = buildPayloadLine(stu.id, subjKeyId);
-            // Check if any data exists to save
-            const hasData = ["interrogation1","interrogation2","interrogation3","devoir1","devoir2"].some(f => g[f] != null);
-            if(!hasData && !g.id) return;
-            if(dirtyMap[key]) toCreate.push(g); // Only save dirty
+      if (r && r.status !== "error") {
+        /* Mettre à jour l'ID si nouvellement créé */
+        if (r.id) {
+          setGradesMap(prev => {
+            const updated = { ...prev, [key]: { ...prev[key], id: r.id } };
+            gradesMapRef.current = updated;
+            return updated;
+          });
+        }
+        /* Effacer dirty */
+        dirtySetRef.current.delete(key);
+        setDirtyMap(d => { const c = { ...d }; delete c[key]; return c; });
+      } else if (r?.status === "error") {
+        setCellErrors(prev => {
+          const updated = { ...prev, [key]: r.errors || { server: "Erreur serveur" } };
+          cellErrorsRef.current = updated;
+          return updated;
         });
+        toast("error", "Erreur serveur sur une cellule.");
+      }
+    } catch (err) {
+      console.error("saveSingleGrade:", err);
+      toast("error", "Erreur de connexion lors de la sauvegarde.");
+    } finally {
+      setSavingMap(s => { const c = { ...s }; delete c[key]; return c; });
+    }
+  }, []); // deps vides : utilise uniquement des refs et setters stables
+
+  /* ── BUG FIX #2 : Blur de cellule → save ── */
+  const handleCellBlur = useCallback((studentId, subjectId) => {
+    const key = gradeKey(String(studentId), String(subjectId));
+    /* Utilise dirtySetRef (toujours à jour, jamais périmé) */
+    if (dirtySetRef.current.has(key)) {
+      const hasErr = cellErrorsRef.current[key] &&
+        Object.keys(cellErrorsRef.current[key]).length > 0;
+      if (!hasErr) saveSingleGrade(key);
+    }
+  }, [saveSingleGrade]);
+
+  /* ── Sauvegarder tout ── */
+  const handleSaveAll = useCallback(async () => {
+    const payload = [];
+    const localErrors = [];
+
+    students.forEach(stu => {
+      subjects.forEach(sub => {
+        const subjId = sub.subject_id != null ? sub.subject_id : sub.id;
+        const key    = gradeKey(String(stu.id), String(subjId));
+
+        const hasErr = cellErrorsRef.current[key] &&
+          Object.keys(cellErrorsRef.current[key]).length > 0;
+        if (hasErr) {
+          localErrors.push({
+            student_label: `${stu.user?.first_name ?? ""} ${stu.user?.last_name ?? ""}`.trim(),
+            subject_label: sub.displayName,
+            status: "error",
+            message: "Erreur de validation locale — corrigez avant de sauvegarder.",
+          });
+          return;
+        }
+
+        if (!dirtySetRef.current.has(key)) return;
+
+        const g = gradesMapRef.current[key];
+        if (!g) return;
+
+        /* Ne pas sauvegarder une cellule complètement vide sans ID */
+        const hasData = GRADE_FIELDS.some(f => g[f.key] != null);
+        if (!hasData && !g.id) return;
+
+        payload.push(buildPayload(g, termRef.current));
+      });
     });
 
-    if(!toCreate.length) { toast.push({type:"info", text:"Aucune modification en attente."}); return; }
+    if (!payload.length && !localErrors.length) {
+      toast("info", "Aucune modification en attente.");
+      return;
+    }
+    if (!payload.length) {
+      setSaveResults(localErrors);
+      setResultOpen(true);
+      return;
+    }
 
-    isBulkSavingRef.current = true;
     setLoading(true);
     try {
-        const data = await postData(`academics/grades/bulk_upsert/`, toCreate);
-        const results = Array.isArray(data.results) ? data.results : [];
-        
-        if(results.length) {
-            setGradesMap(prev => {
-                const copy = {...prev};
-                results.forEach(r => {
-                    const k = gradeKey(String(r.student_id), String(r.subject_id));
-                    if(copy[k]) copy[k] = { ...copy[k], id: r.id || copy[k].id };
-                });
-                return copy;
-            });
-            setDirtyMap({}); // Clear all dirty
-        }
-        setSaveResults(results);
-        toast.push({ type: "success", title: "Sauvegarde terminée", text: `${data.created || 0} créés, ${data.updated || 0} mis à jour.` });
-        setResultModalOpen(true);
-    } catch(err) {
-        console.error(err);
-        toast.push({ type: "error", title: "Echec", text: "Erreur lors de la sauvegarde globale." });
-    } finally {
-        isBulkSavingRef.current = false;
-        setLoading(false);
-    }
-  }, [students, visibleSubjects, dirtyMap, cellHasAnyErrors, term, toast]);
+      const data = await postData("/academics/grades/bulk_upsert/", payload);
+      const results = Array.isArray(data?.results) ? data.results : [];
 
-  /* --- Render Helpers --- */
-  function computeLocalAverages(studentId, subjectId) {
-    const key = gradeKey(studentId, subjectId);
-    const g = gradesMap[key] || {};
-    const ai = avg([g.interrogation1, g.interrogation2, g.interrogation3]);
-    const devoirs = [g.devoir1, g.devoir2].filter(x => x != null);
-    const all = [...(ai != null ? [ai] : []), ...devoirs];
-    return { avgI: ai, avgTot: all.length ? Math.round(all.reduce((a,b)=>a+Number(b),0)/all.length*100)/100 : null };
-  }
+      /* Mettre à jour les IDs et effacer dirty */
+      setGradesMap(prev => {
+        const copy = { ...prev };
+        results.forEach(r => {
+          if (r.status !== "error" && r.student_id && r.subject_id) {
+            const k = gradeKey(String(r.student_id), String(r.subject_id));
+            if (copy[k]) copy[k] = { ...copy[k], id: r.id || copy[k].id };
+            dirtySetRef.current.delete(k);
+          }
+        });
+        gradesMapRef.current = copy;
+        return copy;
+      });
+      setDirtyMap({});
 
-  const renderCellInputs = useCallback((student, subject) => {
-    const subjKeyId = subject.subject_id != null ? subject.subject_id : subject.id;
-    const key = gradeKey(student.id, subjKeyId);
-    const g = gradesMap[key] || {};
-    const errs = cellErrors[key] || {};
-    const dirty = !!dirtyMap[key];
-    const { avgI, avgTot } = computeLocalAverages(student.id, subjKeyId);
+      const allResults = [...localErrors, ...results];
+      setSaveResults(allResults);
+      setResultOpen(true);
 
-    return (
-        <div className={`p-3 rounded-lg border transition-all duration-300 relative group ${dirty ? "bg-amber-50/50 border-amber-200" : "bg-white border-slate-100 hover:border-indigo-100"}`}>
-            {/* Status Indicator Dot */}
-            <div className={`absolute top-2 right-2 w-2 h-2 rounded-full ${dirty ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 opacity-0 group-hover:opacity-100'}`} title={dirty ? "Non sauvegardé" : "Sauvegardé"}></div>
+      const created = data?.created ?? 0;
+      const updated = data?.updated ?? 0;
+      toast("success", `${created} créé${created!==1?"s":""}, ${updated} mis à jour.`);
+    } catch (err) {
+      console.error("handleSaveAll:", err);
+      toast("error", "Erreur lors de la sauvegarde globale.");
+    } finally { setLoading(false); }
+  }, [students, subjects]);
 
-            {/* Inputs Grid */}
-            <div className="grid grid-cols-5 gap-2 mb-2">
-                {["interrogation1", "interrogation2", "interrogation3", "devoir1", "devoir2"].map((f, idx) => (
-                    <div key={f} className="flex flex-col items-center">
-                        <span className="text-[9px] text-slate-400 uppercase font-bold mb-0.5 tracking-tighter">{idx < 3 ? `I${idx+1}` : `D${idx-2}`}</span>
-                        <input 
-                            className={`w-full text-center text-xs font-medium h-8 rounded border outline-none transition-all shadow-sm focus:ring-2 focus:z-10
-                                ${errs[f] ? "border-red-400 focus:ring-red-200 bg-red-50" : "border-slate-200 focus:border-indigo-400 focus:ring-indigo-100 bg-white"}`}
-                            value={fmtNullable(g[f])}
-                            placeholder="-"
-                            onChange={e => setGradeCell(student.id, subjKeyId, f, e.target.value)}
-                        />
-                    </div>
-                ))}
-            </div>
+  /* ── Moyennes de classe par matière (barre de stats) ── */
+  const classAverages = useMemo(() => {
+    const map = {};
+    subjects.forEach(sub => {
+      const subjId = sub.subject_id != null ? sub.subject_id : sub.id;
+      const vals = students
+        .map(stu => {
+          const key = gradeKey(String(stu.id), String(subjId));
+          const g   = gradesMap[key];
+          if (!g) return null;
+          return calcAvg([g.interrogation1, g.interrogation2, g.interrogation3, g.devoir1, g.devoir2]);
+        })
+        .filter(v => v != null);
+      map[sub.id] = vals.length ? calcAvg(vals) : null;
+    });
+    return map;
+  }, [gradesMap, students, subjects]);
 
-            {/* Averages Footer */}
-            <div className="flex justify-between items-center pt-2 border-t border-slate-100/50 text-[10px]">
-                <div className="text-slate-500 font-medium">Moy. Interros: <span className="text-slate-800 font-bold">{avgI ?? "-"}</span></div>
-                <div className={`font-bold px-2 py-0.5 rounded ${avgTot < 10 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700'}`}>
-                    Moyenne: {avgTot ?? "-"}
-                </div>
-            </div>
-            
-            {/* Errors Overlay */}
-            {Object.keys(errs).length > 0 && (
-                <div className="absolute inset-x-0 -bottom-2 flex justify-center">
-                    <span className="bg-red-100 text-red-700 text-[10px] px-2 py-0.5 rounded-full shadow-sm border border-red-200 flex items-center gap-1">
-                        <FaExclamationTriangle size={10} /> Erreur saisie
-                    </span>
-                </div>
-            )}
-        </div>
-    );
-  }, [gradesMap, cellErrors, dirtyMap, setGradeCell]);
-
-
+  /* ══════════════════════════════════════
+     RENDER
+  ══════════════════════════════════════ */
   return (
-    <div className="p-6 min-h-screen bg-slate-50/50 font-sans pb-24" style={{ "--header-h": `${headerHeight}px` }}>
-      
-      {/* STICKY HEADER */}
-      <div ref={headerRef} className="sticky top-4 z-40 mb-6">
-        <div className="bg-white/90 backdrop-blur-md border border-white/50 shadow-xl shadow-slate-200/50 rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            
-            {/* Title & Breadcrumb */}
+    <div style={{
+      minHeight:"100vh", background:T.pageBg, transition:"background .3s",
+      fontFamily:"'Plus Jakarta Sans', sans-serif", paddingBottom:80,
+    }}>
+      <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+      {/* ═══ HEADER STICKY ═══ */}
+      <div ref={headerRef} style={{
+        position:"sticky", top:0, zIndex:50,
+        background:T.headerBg, backdropFilter:"blur(18px)",
+        borderBottom:`1px solid ${T.divider}`, transition:"all .3s",
+      }}>
+        <div style={{
+          maxWidth:1600, margin:"0 auto", padding:"10px 20px",
+          display:"flex", alignItems:"center", gap:12, flexWrap:"wrap",
+        }}>
+          {/* Titre */}
+          <div style={{ display:"flex", alignItems:"center", gap:10, flex:1, minWidth:200 }}>
+            <div style={{
+              width:38, height:38, borderRadius:11, flexShrink:0,
+              display:"flex", alignItems:"center", justifyContent:"center",
+              background:`linear-gradient(135deg,${COL.from},${COL.to})`,
+              boxShadow:`0 6px 16px ${COL.shadow}`,
+            }}>
+              <FaTable style={{ width:14,height:14,color:"#fff" }} />
+            </div>
             <div>
-                <h1 className="text-2xl font-black text-slate-800 tracking-tight">Saisie des Notes</h1>
-                <div className="flex items-center gap-2 text-xs font-medium text-slate-500 mt-1">
-                    <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">Enseignant</span>
-                    <span>•</span>
-                    <span>Mode Grille</span>
-                    {Object.keys(dirtyMap).length > 0 && (
-                        <span className="text-amber-600 flex items-center gap-1 animate-pulse">
-                            • {Object.keys(dirtyMap).length} modif(s) en attente
-                        </span>
-                    )}
-                </div>
+              <h1 style={{ fontSize:15, fontWeight:900, color:T.textPrimary, letterSpacing:"-0.02em" }}>
+                Saisie des Notes
+              </h1>
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:1 }}>
+                <span style={{
+                  padding:"1px 7px", borderRadius:999, fontSize:9, fontWeight:800,
+                  background:`${COL.from}18`, color:COL.from,
+                  textTransform:"uppercase", letterSpacing:"0.06em",
+                }}>
+                  Grille interactive
+                </span>
+                {pendingCount > 0 && (
+                  <span style={{
+                    padding:"1px 7px", borderRadius:999, fontSize:9, fontWeight:800,
+                    background:"#f59e0b18", color:"#f59e0b",
+                    animation:"pulse 2s ease-in-out infinite",
+                  }}>
+                    {pendingCount} modif{pendingCount>1?"s":""} en attente
+                  </span>
+                )}
+              </div>
             </div>
+          </div>
 
-            {/* Controls Toolbar */}
-            <div className="flex flex-wrap items-center gap-3">
-                {/* Class Selector */}
-                <div className="relative">
-                    <select 
-                        value={selectedClassId} 
-                        onChange={e => setSelectedClassId(e.target.value)}
-                        className="appearance-none bg-slate-100 hover:bg-slate-200 border-transparent text-sm font-bold text-slate-700 py-2.5 pl-4 pr-10 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-colors cursor-pointer min-w-[200px]"
-                    >
-                        <option value="">-- Sélectionner une classe --</option>
-                        {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                    <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none text-slate-500">▼</div>
-                </div>
+          {/* Sélecteur classe */}
+          <div style={{ position:"relative" }}>
+            <FaUserGraduate style={{
+              position:"absolute", left:11, top:"50%", transform:"translateY(-50%)",
+              width:11,height:11, color:T.textMuted, pointerEvents:"none", zIndex:1,
+            }} />
+            <select
+              value={classId}
+              onChange={e => setClassId(e.target.value)}
+              style={{
+                appearance:"none", paddingLeft:30, paddingRight:28,
+                paddingTop:9, paddingBottom:9, fontSize:12, borderRadius:10,
+                outline:"none", transition:"all .15s", minWidth:200,
+                background:T.inputBg, color:classId?T.textPrimary:T.textMuted,
+                border:`1.5px solid ${T.inputBorder}`, cursor:"pointer",
+                fontFamily:"'Plus Jakarta Sans', sans-serif",
+              }}
+              onFocus={(e)  => { e.target.style.borderColor=COL.from; e.target.style.boxShadow=`0 0 0 3px ${COL.from}22`; }}
+              onBlur={(e)   => { e.target.style.borderColor=T.inputBorder; e.target.style.boxShadow="none"; }}>
+              <option value="">— Choisir une classe —</option>
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <FaChevronDown style={{
+              position:"absolute", right:9, top:"50%", transform:"translateY(-50%)",
+              width:8,height:8, color:T.textMuted, pointerEvents:"none",
+            }} />
+          </div>
 
-                {/* Term Switcher */}
-                <div className="bg-slate-100 p-1 rounded-xl flex shadow-inner">
-                    {["T1", "T2", "T3"].map(t => (
-                        <button 
-                            key={t}
-                            onClick={() => setTerm(t)}
-                            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${term === t ? 'bg-white text-indigo-600 shadow-sm scale-105' : 'text-slate-500 hover:text-slate-700'}`}
-                        >
-                            {t}
-                        </button>
-                    ))}
-                </div>
-
-                <div className="w-px h-8 bg-slate-200 mx-2 hidden md:block"></div>
-
-                {/* Action Buttons */}
-                <button 
-                    onClick={async () => { 
-                        if(!selectedClassId) return; 
-                        setLoading(true); 
-                        await reloadAllForClass(selectedClassId, term); 
-                        setLoading(false); 
-                    }}
-                    className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition border border-transparent hover:border-indigo-100"
-                    title="Rafraîchir les données"
-                >
-                    <FaSyncAlt className={loading ? "animate-spin" : ""} />
+          {/* Sélecteur trimestre */}
+          <div style={{
+            display:"flex", background:T.inputBg, borderRadius:10, padding:3,
+            border:`1.5px solid ${T.inputBorder}`,
+          }}>
+            {TERMS.map(({ v, color }) => {
+              const active = term === v;
+              return (
+                <button key={v} onClick={() => setTerm(v)}
+                  style={{
+                    padding:"6px 14px", borderRadius:8, border:"none", cursor:"pointer",
+                    fontSize:11, fontWeight:800, transition:"all .15s",
+                    background: active ? color : "transparent",
+                    color:      active ? "#fff" : T.textMuted,
+                    boxShadow:  active ? `0 2px 8px ${color}44` : "none",
+                    transform:  active ? "scale(1.04)" : "scale(1)",
+                  }}>
+                  {v}
                 </button>
+              );
+            })}
+          </div>
 
-                <button 
-                    onClick={handleSaveAll}
-                    disabled={Object.keys(dirtyMap).length === 0}
-                    className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm text-white shadow-lg shadow-indigo-200 transition-all active:scale-95
-                        ${Object.keys(dirtyMap).length > 0 ? 'bg-indigo-600 hover:bg-indigo-700 hover:shadow-indigo-300' : 'bg-slate-300 cursor-not-allowed shadow-none'}`}
-                >
-                    <FaSave /> Sauvegarder Tout
-                </button>
-            </div>
+          <div style={{ width:1, height:28, background:T.divider }} />
+
+          {/* Bouton refresh */}
+          <button onClick={() => reloadClass(classId, term)} disabled={!classId || loading}
+            style={{
+              width:34, height:34, borderRadius:9, border:`1.5px solid ${T.cardBorder}`,
+              background:"transparent", cursor:classId?"pointer":"not-allowed",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              color:T.textMuted, transition:"all .15s",
+              opacity:!classId?0.4:1,
+            }}
+            onMouseEnter={(e) => classId && (e.currentTarget.style.borderColor=COL.from, e.currentTarget.style.color=COL.from)}
+            onMouseLeave={(e) => (e.currentTarget.style.borderColor=T.cardBorder, e.currentTarget.style.color=T.textMuted)}
+            title="Recharger les données">
+            <FaSyncAlt style={{ width:12,height:12 }} className={loading?"animate-spin":""} />
+          </button>
+
+          {/* Bouton sauvegarder tout */}
+          <button onClick={handleSaveAll}
+            disabled={pendingCount === 0 || loading}
+            style={{
+              display:"flex", alignItems:"center", gap:7,
+              padding:"9px 18px", borderRadius:10, border:"none", cursor:"pointer",
+              fontSize:12, fontWeight:800, color:"#fff", transition:"all .2s",
+              background: pendingCount === 0
+                ? T.textMuted
+                : `linear-gradient(135deg,${COL.from},${COL.to})`,
+              boxShadow: pendingCount === 0 ? "none" : `0 4px 14px ${COL.shadow}`,
+              opacity: pendingCount === 0 ? 0.5 : 1,
+            }}>
+            <FaSave style={{ width:11,height:11 }} />
+            Sauvegarder tout
+            {pendingCount > 0 && (
+              <span style={{
+                background:"rgba(255,255,255,0.25)", borderRadius:999,
+                padding:"1px 7px", fontSize:10, fontWeight:900,
+              }}>
+                {pendingCount}
+              </span>
+            )}
+          </button>
+
+          <DarkToggle />
         </div>
       </div>
 
-      {/* ALERTS & EMPTY STATES */}
-      {subjectsNote && (
-          <div className="max-w-4xl mx-auto mb-6 p-4 rounded-xl bg-amber-50 border border-amber-100 text-amber-800 text-sm font-medium flex items-center gap-3">
-              <FaExclamationTriangle /> {subjectsNote}
-          </div>
-      )}
+      {/* ═══ CONTENU ═══ */}
+      <div style={{ maxWidth:1600, margin:"0 auto", padding:"16px 20px 0" }}>
 
-      {!selectedClassId ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center border-2 border-dashed border-slate-200 rounded-3xl bg-white/50">
-              <div className="bg-indigo-50 p-4 rounded-full mb-4 text-indigo-300"><FaTable size={32} /></div>
-              <h3 className="text-lg font-bold text-slate-700">Aucune classe sélectionnée</h3>
-              <p className="text-slate-500 text-sm mt-1">Veuillez choisir une classe dans la barre d'outils ci-dessus pour commencer la saisie.</p>
+        {/* Alerte matières */}
+        {subNote && (
+          <div style={{
+            display:"flex", alignItems:"center", gap:10,
+            padding:"11px 16px", borderRadius:11, marginBottom:14,
+            background:"#f59e0b10", border:"1.5px solid #f59e0b33",
+          }}>
+            <FaExclamationTriangle style={{ width:13,height:13,color:"#f59e0b",flexShrink:0 }} />
+            <p style={{ fontSize:12, fontWeight:600, color:"#b45309" }}>{subNote}</p>
           </div>
-      ) : loading ? (
-          <div className="flex flex-col items-center justify-center py-32">
-              <div className="w-12 h-12 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
-              <p className="text-slate-400 font-medium text-sm animate-pulse">Chargement de la grille...</p>
+        )}
+
+        {/* État initial */}
+        {!classId ? (
+          <div style={{
+            padding:"80px 24px", textAlign:"center",
+            border:`2px dashed ${T.cardBorder}`, borderRadius:20,
+            background:T.cardBg,
+          }}>
+            <div style={{
+              width:64, height:64, borderRadius:18, margin:"0 auto 16px",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              background:`${COL.from}15`,
+            }}>
+              <FaTable style={{ width:26,height:26,color:COL.from,opacity:.5 }} />
+            </div>
+            <p style={{ fontSize:15, fontWeight:800, color:T.textPrimary }}>
+              Sélectionnez une classe
+            </p>
+            <p style={{ fontSize:12, color:T.textMuted, marginTop:6 }}>
+              Choisissez une classe dans la barre d'outils pour commencer la saisie des notes.
+            </p>
           </div>
-      ) : students.length === 0 || visibleSubjects.length === 0 ? (
-          <div className="text-center py-20 bg-white rounded-2xl shadow-sm border border-slate-100">
-              <p className="text-slate-500 font-medium">Aucune donnée trouvée pour cette configuration (Élèves ou Matières manquants).</p>
+
+        ) : loading ? (
+          <div style={{
+            padding:"80px 24px", textAlign:"center",
+            border:`2px dashed ${T.cardBorder}`, borderRadius:20,
+            background:T.cardBg,
+          }}>
+            <FaSyncAlt style={{
+              width:28,height:28,color:COL.from,margin:"0 auto 14px",
+              animation:"spin 1s linear infinite", display:"block",
+            }} />
+            <p style={{ fontSize:12, color:T.textMuted, animation:"pulse 1.5s ease-in-out infinite" }}>
+              Chargement de la grille…
+            </p>
           </div>
-      ) : (
-          /* GRID CONTAINER */
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-xl shadow-slate-200/40 overflow-hidden flex flex-col max-h-[calc(100vh-180px)]">
-              {/* Stats Bar */}
-              <div className="bg-slate-50/80 border-b border-slate-200 px-6 py-2 flex justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  <span>{students.length} Élèves</span>
-                  <span>{visibleSubjects.length} Matières</span>
+
+        ) : students.length === 0 || subjects.length === 0 ? (
+          <div style={{
+            padding:"60px 24px", textAlign:"center",
+            border:`2px dashed ${T.cardBorder}`, borderRadius:20,
+            background:T.cardBg,
+          }}>
+            <FaExclamationTriangle style={{ width:22,height:22,color:"#f59e0b",margin:"0 auto 12px",display:"block" }} />
+            <p style={{ fontSize:13, fontWeight:700, color:T.textSecondary }}>
+              {students.length === 0 ? "Aucun élève inscrit dans cette classe"
+               : "Aucune matière configurée pour cette classe"}
+            </p>
+          </div>
+
+        ) : (
+          /* ═══ GRILLE PRINCIPALE ═══ */
+          <div style={{
+            borderRadius:16, overflow:"hidden",
+            background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
+            boxShadow:T.cardShadow,
+          }}>
+            {/* Barre de résumé */}
+            <div style={{
+              display:"flex", alignItems:"center", justifyContent:"space-between",
+              padding:"8px 16px", background:T.tableHead,
+              borderBottom:`1px solid ${T.divider}`,
+            }}>
+              <div style={{ display:"flex", gap:16 }}>
+                {[
+                  { label:`${students.length} élève${students.length>1?"s":""}` },
+                  { label:`${subjects.length} matière${subjects.length>1?"s":""}` },
+                  { label:`Trimestre ${term}`, color:TERMS.find(t=>t.v===term)?.color },
+                ].map(({ label, color }, i) => (
+                  <p key={i} style={{
+                    fontSize:10, fontWeight:700, color:color||T.textMuted,
+                    textTransform:"uppercase", letterSpacing:"0.07em",
+                  }}>
+                    {label}
+                  </p>
+                ))}
               </div>
+              {pendingCount > 0 && (
+                <p style={{
+                  fontSize:10, fontWeight:700, color:"#f59e0b",
+                  animation:"pulse 2s ease-in-out infinite",
+                }}>
+                  {pendingCount} cellule{pendingCount>1?"s":""} non sauvegardée{pendingCount>1?"s":""}
+                </p>
+              )}
+            </div>
 
-              <div className="overflow-auto custom-scrollbar flex-1">
-                  <table className="min-w-max border-collapse">
-                      <thead className="sticky top-0 z-30 bg-white shadow-sm">
-                          <tr>
-                              <th className="sticky left-0 z-40 bg-white p-0 border-b border-r border-slate-200 w-64 min-w-[250px] shadow-[4px_0_8px_-4px_rgba(0,0,0,0.05)]">
-                                  <div className="h-full p-4 flex items-center gap-3 bg-slate-50/50">
-                                      <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg"><FaUserGraduate /></div>
-                                      <div className="text-left">
-                                          <div className="text-slate-800 font-bold text-sm">Élève</div>
-                                          <div className="text-[10px] text-slate-400 font-normal">Nom & Prénom</div>
-                                      </div>
-                                  </div>
-                              </th>
-                              {visibleSubjects.map(s => (
-                                  <th key={s.id} className="p-3 border-b border-r border-slate-100 min-w-[280px] bg-slate-50/30 text-left align-top">
-                                      <div className="flex items-center gap-2 mb-1">
-                                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
-                                          <span className="font-bold text-slate-700 text-xs uppercase tracking-wide truncate max-w-[200px]" title={s.displayName}>{s.displayName}</span>
-                                      </div>
-                                      <div className="h-1 w-8 bg-indigo-100 rounded-full"></div>
-                                  </th>
-                              ))}
-                          </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                          {students.map((stu, idx) => (
-                              <tr key={stu.id} className="group hover:bg-slate-50/50 transition-colors">
-                                  <td className="sticky left-0 z-20 bg-white group-hover:bg-slate-50/50 p-4 border-r border-slate-200 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.05)]">
-                                      <div className="flex items-center gap-3">
-                                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center text-xs font-bold text-slate-600 border border-white shadow-sm">
-                                              {(stu.user?.first_name?.[0] || "E")}
-                                          </div>
-                                          <div className="min-w-0">
-                                              <div className="font-bold text-slate-700 text-sm truncate max-w-[160px]" title={`${stu.user?.first_name} ${stu.user?.last_name}`}>
-                                                  {stu.user?.first_name} {stu.user?.last_name}
-                                              </div>
-                                              <div className="text-[10px] text-slate-400 font-mono">ID: {stu.id}</div>
-                                          </div>
-                                      </div>
-                                  </td>
-                                  {visibleSubjects.map(s => (
-                                      <td key={s.id} className="p-2 border-r border-slate-50 align-top">
-                                          {renderCellInputs(stu, s)}
-                                      </td>
-                                  ))}
-                              </tr>
-                          ))}
-                      </tbody>
-                  </table>
-              </div>
+            {/* Tableau */}
+            <div style={{
+              overflowX:"auto", overflowY:"auto",
+              maxHeight:`calc(100vh - ${headerH + 120}px)`,
+              scrollbarWidth:"thin", scrollbarColor:`${COL.from} transparent`,
+            }}>
+              <table style={{ borderCollapse:"collapse", minWidth:"max-content", width:"100%" }}>
+
+                {/* En-tête */}
+                <thead>
+                  <tr>
+                    {/* Colonne Élève — collante */}
+                    <th style={{
+                      position:"sticky", left:0, top:0, zIndex:40,
+                      background:T.tableHead, padding:0,
+                      borderBottom:`2px solid ${T.divider}`,
+                      borderRight:`1px solid ${T.divider}`,
+                      minWidth:220, width:220,
+                    }}>
+                      <div style={{
+                        padding:"10px 14px", display:"flex", alignItems:"center", gap:8,
+                      }}>
+                        <div style={{
+                          width:26, height:26, borderRadius:7,
+                          display:"flex", alignItems:"center", justifyContent:"center",
+                          background:`${COL.from}18`,
+                        }}>
+                          <FaUserGraduate style={{ width:11,height:11,color:COL.from }} />
+                        </div>
+                        <div>
+                          <p style={{ fontSize:11, fontWeight:800, color:T.textPrimary }}>Élève</p>
+                          <p style={{ fontSize:9, color:T.textMuted }}>Nom & Prénom</p>
+                        </div>
+                      </div>
+                    </th>
+
+                    {/* Colonnes matières */}
+                    {subjects.map(sub => (
+                      <th key={sub.id} style={{
+                        position:"sticky", top:0, zIndex:30,
+                        background:T.tableHead, padding:"10px 8px",
+                        borderBottom:`2px solid ${T.divider}`,
+                        borderRight:`1px solid ${T.divider}`,
+                        minWidth:240, textAlign:"left", verticalAlign:"bottom",
+                      }}>
+                        <div style={{ display:"flex", alignItems:"flex-start", gap:6 }}>
+                          <div style={{
+                            width:3, height:"100%", minHeight:30, borderRadius:999, flexShrink:0,
+                            background:`linear-gradient(180deg,${COL.from},${COL.to})`,
+                            marginTop:2,
+                          }} />
+                          <div style={{ flex:1 }}>
+                            <p style={{
+                              fontSize:11, fontWeight:800, color:T.textPrimary,
+                              overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                              maxWidth:200,
+                            }} title={sub.displayName}>
+                              {sub.displayName}
+                            </p>
+                            {/* Moyenne de classe pour cette matière */}
+                            {classAverages[sub.id] != null && (
+                              <div style={{
+                                display:"inline-flex", alignItems:"center", gap:4,
+                                marginTop:3, padding:"1px 7px", borderRadius:999,
+                                background:`${colorForGrade(classAverages[sub.id])||COL.from}18`,
+                              }}>
+                                <FaChartBar style={{ width:7,height:7,color:colorForGrade(classAverages[sub.id])||COL.from }} />
+                                <span style={{
+                                  fontSize:9, fontWeight:800,
+                                  color:colorForGrade(classAverages[sub.id])||COL.from,
+                                }}>
+                                  Moy. {classAverages[sub.id]}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+
+                {/* Corps */}
+                <tbody>
+                  {students.map((stu, idx) => {
+                    const studentName = `${stu.user?.first_name ?? ""} ${stu.user?.last_name ?? ""}`.trim() || `Élève #${stu.id}`;
+                    const initials    = (stu.user?.first_name?.[0] ?? "?") + (stu.user?.last_name?.[0] ?? "");
+                    const rowBg       = idx % 2 === 0 ? "transparent"
+                      : (dark ? "rgba(255,255,255,0.018)" : "rgba(0,0,0,0.012)");
+
+                    return (
+                      <tr key={stu.id} style={{ background:rowBg }}>
+
+                        {/* Cellule Élève — collante */}
+                        <td style={{
+                          position:"sticky", left:0, zIndex:20,
+                          background: dark
+                            ? (idx%2===0?"#1e1e2e":"#1b1b2b")
+                            : (idx%2===0?"#ffffff":"#fafafa"),
+                          padding:"8px 14px",
+                          borderBottom:`1px solid ${T.divider}`,
+                          borderRight:`1px solid ${T.divider}`,
+                          boxShadow:"4px 0 8px -4px rgba(0,0,0,0.08)",
+                        }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                            <div style={{
+                              width:32, height:32, borderRadius:9, flexShrink:0,
+                              display:"flex", alignItems:"center", justifyContent:"center",
+                              background:`linear-gradient(135deg,${COL.from},${COL.to})`,
+                              fontSize:11, fontWeight:800, color:"#fff",
+                              boxShadow:`0 2px 6px ${COL.shadow}`,
+                            }}>
+                              {initials.toUpperCase()}
+                            </div>
+                            <div style={{ minWidth:0 }}>
+                              <p style={{
+                                fontSize:12, fontWeight:700, color:T.textPrimary,
+                                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                                maxWidth:150,
+                              }} title={studentName}>
+                                {studentName}
+                              </p>
+                              <p style={{ fontSize:9, color:T.textMuted, fontFamily:"monospace" }}>
+                                #{stu.id}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Cellules notes */}
+                        {subjects.map(sub => {
+                          const subjId  = sub.subject_id != null ? sub.subject_id : sub.id;
+                          const key     = gradeKey(String(stu.id), String(subjId));
+                          return (
+                            <td key={sub.id} style={{
+                              padding:"6px 6px",
+                              borderBottom:`1px solid ${T.divider}`,
+                              borderRight:`1px solid ${T.divider}`,
+                              verticalAlign:"top",
+                            }}>
+                              <GradeCell
+                                studentId={stu.id}
+                                subjectId={subjId}
+                                gradeData={gradesMap[key]}
+                                errors={cellErrors[key]}
+                                isDirty={!!dirtyMap[key]}
+                                isSaving={!!savingMap[key]}
+                                onFieldChange={handleFieldChange}
+                                onCellBlur={handleCellBlur}
+                              />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-      )}
+        )}
+      </div>
 
-      {/* MODALS & TOASTS */}
-      <ResultModal open={resultModalOpen} onClose={() => setResultModalOpen(false)} results={saveResults} />
-      
-      {/* CSS for animations & scrollbars */}
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #f8fafc; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; border: 2px solid #f8fafc; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-        .animate-slideUp { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .animate-fadeIn { animation: fadeIn 0.2s ease-out forwards; }
+      {/* ── Modals & Toast ── */}
+      <ResultModal
+        open={resultOpen}
+        onClose={() => setResultOpen(false)}
+        results={saveResults} />
+
+      <Toast msg={msg} onClose={() => setMsg(null)} />
+
+      <style>{BASE_KEYFRAMES}{`
+        .animate-spin { animation: spin 1s linear infinite; }
+        @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        @keyframes pulse   { 0%,100%{opacity:.6} 50%{opacity:1} }
       `}</style>
     </div>
   );
-}
+};
+
+/* ──────────────────────────────────────────────────────────────
+   ROOT
+────────────────────────────────────────────────────────────── */
+const GradeEntry = () => {
+  const [dark, setDark] = useState(() => {
+    try { return localStorage.getItem("scol360_dark") === "true"; } catch { return false; }
+  });
+  const toggle = useCallback(() => {
+    setDark(v => {
+      const n = !v;
+      try { localStorage.setItem("scol360_dark", String(n)); } catch {}
+      return n;
+    });
+  }, []);
+  return (
+    <ThemeCtx.Provider value={{ dark, toggle }}>
+      <GradesInner />
+    </ThemeCtx.Provider>
+  );
+};
+
+export default GradeEntry;
