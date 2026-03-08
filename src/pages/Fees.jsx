@@ -15,7 +15,7 @@ import {
   SECTION_PALETTE, avatarGradient, BASE_KEYFRAMES,
 } from "./theme";
 
-const COL = SECTION_PALETTE.finance; // emerald → teal
+const COL = SECTION_PALETTE.finance;
 
 /* ──────────────────────────────────────────────────────────────
    UTILS
@@ -90,7 +90,7 @@ const Toast = ({ msg, onClose }) => {
 };
 
 /* ──────────────────────────────────────────────────────────────
-   MODAL — avec prop zIndex pour la gestion des couches
+   MODAL
 ────────────────────────────────────────────────────────────── */
 const Modal = ({ isOpen, onClose, title, accentColor, icon: Icon, children, width = 520, zIndex = 100 }) => {
   const { dark } = useTheme();
@@ -122,10 +122,7 @@ const Modal = ({ isOpen, onClose, title, accentColor, icon: Icon, children, widt
         animation:"panelUp .22s cubic-bezier(.34,1.4,.64,1)",
         border:`1.5px solid ${T.cardBorder}`,
       }}>
-        {/* Top accent bar */}
         <div style={{ height:4, background:`linear-gradient(90deg,${ac},${COL.to})`, flexShrink:0 }} />
-
-        {/* Header */}
         <div style={{
           display:"flex", alignItems:"center", gap:10, padding:"14px 18px",
           borderBottom:`1px solid ${T.divider}`, flexShrink:0,
@@ -155,8 +152,6 @@ const Modal = ({ isOpen, onClose, title, accentColor, icon: Icon, children, widt
             <FaTimes style={{ width:11,height:11 }} />
           </button>
         </div>
-
-        {/* Body scrollable */}
         <div style={{
           flex:1, overflowY:"auto", padding:"18px",
           scrollbarWidth:"thin", scrollbarColor:`${COL.from} transparent`,
@@ -169,7 +164,7 @@ const Modal = ({ isOpen, onClose, title, accentColor, icon: Icon, children, widt
 };
 
 /* ──────────────────────────────────────────────────────────────
-   CONFIRM DIALOG (remplace window.confirm)
+   CONFIRM DIALOG
 ────────────────────────────────────────────────────────────── */
 const ConfirmDialog = ({ open, message, onConfirm, onCancel, zIndex = 300 }) => {
   const { dark } = useTheme();
@@ -348,16 +343,8 @@ const StudentCard = ({ student, onOpenFees, animDelay }) => {
         animation:`fadeUp .3s ease-out ${animDelay}ms both`,
         display:"flex", flexDirection:"column",
       }}>
-
-      {/* Bande de couleur */}
-      <div style={{
-        height:3,
-        background:`linear-gradient(90deg,${gradFrom},${gradTo})`,
-      }} />
-
-      {/* Corps */}
+      <div style={{ height:3, background:`linear-gradient(90deg,${gradFrom},${gradTo})` }} />
       <div style={{ padding:"14px 14px 12px", display:"flex", alignItems:"flex-start", gap:10 }}>
-        {/* Avatar */}
         <div style={{
           width:40, height:40, borderRadius:11, flexShrink:0,
           display:"flex", alignItems:"center", justifyContent:"center",
@@ -369,13 +356,10 @@ const StudentCard = ({ student, onOpenFees, animDelay }) => {
         }}>
           {initial}
         </div>
-
-        {/* Infos */}
         <div style={{ flex:1, minWidth:0 }}>
           <p style={{
             fontSize:13, fontWeight:800, color:T.textPrimary,
-            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-            lineHeight:1.2,
+            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", lineHeight:1.2,
           }}>
             {name}
           </p>
@@ -391,22 +375,16 @@ const StudentCard = ({ student, onOpenFees, animDelay }) => {
             <span style={{
               display:"inline-block", marginTop:5, padding:"2px 8px",
               borderRadius:999, fontSize:10, fontWeight:700,
-              background:`${gradFrom}18`, color:gradFrom,
-              border:`1px solid ${gradFrom}33`,
+              background:`${gradFrom}18`, color:gradFrom, border:`1px solid ${gradFrom}33`,
             }}>
               {className}
             </span>
           )}
         </div>
       </div>
-
-      {/* Footer — bouton */}
       <div style={{
-        padding:"10px 14px",
-        borderTop:`1px solid ${T.divider}`,
-        background: hov
-          ? (dark ? `${COL.from}10` : `${COL.from}07`)
-          : "transparent",
+        padding:"10px 14px", borderTop:`1px solid ${T.divider}`,
+        background: hov ? (dark ? `${COL.from}10` : `${COL.from}07`) : "transparent",
         transition:"background .2s",
       }}>
         <button onClick={() => onOpenFees(student)}
@@ -438,8 +416,7 @@ const StatCard = ({ label, value, sub, color, icon: Icon, pct }) => {
   return (
     <div style={{
       borderRadius:12, padding:"12px 14px",
-      background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
-      boxShadow:T.cardShadow,
+      background:T.cardBg, border:`1.5px solid ${T.cardBorder}`, boxShadow:T.cardShadow,
     }}>
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
         <div style={{
@@ -474,7 +451,7 @@ const StatCard = ({ label, value, sub, color, icon: Icon, pct }) => {
 };
 
 /* ──────────────────────────────────────────────────────────────
-   STATUS BADGE (pour les frais)
+   STATUS BADGE
 ────────────────────────────────────────────────────────────── */
 const StatusBadge = ({ paid, overdue }) => {
   let bg, color, label;
@@ -484,8 +461,7 @@ const StatusBadge = ({ paid, overdue }) => {
   return (
     <span style={{
       padding:"3px 9px", borderRadius:999, fontSize:9, fontWeight:800,
-      background:bg, color, border:`1px solid ${color}44`,
-      letterSpacing:"0.05em",
+      background:bg, color, border:`1px solid ${color}44`, letterSpacing:"0.05em",
     }}>
       {label}
     </span>
@@ -501,6 +477,7 @@ const StudentsWithFeesInner = () => {
 
   /* ── Référentiels ── */
   const [classes,  setClasses]  = useState([]);
+  const [levels,   setLevels]   = useState([]); // ✅ FIX : niveaux séparés des classes
   const [feeTypes, setFeeTypes] = useState([]);
   const [stats,    setStats]    = useState(null);
   const [loadingStats, setLoadingStats] = useState(false);
@@ -515,7 +492,7 @@ const StudentsWithFeesInner = () => {
   const searchRef = useRef(null);
 
   /* ── Modal fees ── */
-  const [feesOpen,       setFeesOpen]       = useState(false);
+  const [feesOpen,        setFeesOpen]        = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [fees,            setFees]            = useState([]);
   const [loadingFees,     setLoadingFees]     = useState(false);
@@ -523,9 +500,9 @@ const StudentsWithFeesInner = () => {
   const [feeForm, setFeeForm] = useState({ id:null, fee_type_id:"", amount:"", due_date:"" });
 
   /* ── Modal paiements ── */
-  const [paymentsOpen,  setPaymentsOpen]  = useState(false);
-  const [selectedFee,   setSelectedFee]   = useState(null);
-  const [payments,      setPayments]      = useState([]);
+  const [paymentsOpen,    setPaymentsOpen]    = useState(false);
+  const [selectedFee,     setSelectedFee]     = useState(null);
+  const [payments,        setPayments]        = useState([]);
   const [loadingPayments, setLoadingPayments] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ amount:"", method:"CASH", reference:"", note:"" });
 
@@ -549,12 +526,22 @@ const StudentsWithFeesInner = () => {
   /* ══ FETCHERS ══ */
   const fetchLookups = useCallback(async () => {
     try {
-      const [cls, ft] = await Promise.all([
+      // ✅ FIX : on charge aussi les niveaux (Level) séparément des classes
+      const [cls, ft, lvl] = await Promise.all([
         fetchData("/academics/school-classes/"),
         fetchData("/fees/fee-types/"),
+        fetchData("/academics/levels/"),
       ]);
-      setClasses(cls || []);
-      setFeeTypes((ft || []).map((f) => ({ ...f, amounts: f.amounts || f.amount_set || [] })));
+      // Normalise : gère tableau direct OU réponse paginée { results: [...] }
+      const toArray = (d) => {
+        if (!d) return [];
+        if (Array.isArray(d)) return d;
+        if (Array.isArray(d.results)) return d.results;
+        return [];
+      };
+      setClasses(toArray(cls));
+      setFeeTypes(toArray(ft).map((f) => ({ ...f, amounts: f.amounts || f.amount_set || [] })));
+      setLevels(toArray(lvl));
     } catch { toast("error", "Erreur chargement données."); }
   }, []);
 
@@ -603,8 +590,11 @@ const StudentsWithFeesInner = () => {
       setFees((raw || []).map((f) => {
         const paid = Number(f.total_paid ?? f.paid_amount ?? 0);
         const amount = Number(f.amount || 0);
-        const remaining = Math.max(0, Number(f.total_remaining ?? (amount - paid)));
-        return { ...f, total_paid:paid, total_remaining:remaining };
+        // ✅ FIX : total_remaining vient de l'API (annoté) ; fallback seulement si absent
+        const remaining = f.total_remaining != null
+          ? Math.max(0, Number(f.total_remaining))
+          : Math.max(0, amount - paid);
+        return { ...f, total_paid: paid, total_remaining: remaining };
       }));
     } catch { toast("error", "Impossible de charger les frais."); }
     finally { setLoadingFees(false); }
@@ -624,18 +614,37 @@ const StudentsWithFeesInner = () => {
     if (!feeForm.fee_type_id) return toast("error", "Veuillez choisir un type de frais.");
     setSaving(true);
     try {
-      const payload = {
-        ...(feeForm.id ? {} : { student:selectedStudent.id, fee_type_id:feeForm.fee_type_id }),
-        amount: feeForm.amount || undefined,
-        due_date: feeForm.due_date || null,
-      };
-      if (feeForm.id) await patchData(`/fees/fees/${feeForm.id}/`, payload);
-      else            await postData("/fees/fees/", payload);
+      if (feeForm.id) {
+        // PATCH : on modifie seulement montant et échéance
+        // ✅ FIX : ne pas envoyer fee_type ni student en modification
+        const payload = {
+          amount:   feeForm.amount   || undefined,
+          due_date: feeForm.due_date || null,
+        };
+        await patchData(`/fees/fees/${feeForm.id}/`, payload);
+      } else {
+        // POST : création
+        // ✅ FIX 1 : utiliser student_id (champ write-only du serializer)
+        // ✅ FIX 2 : utiliser fee_type (nom exact du champ serializer, pas fee_type_id)
+        const payload = {
+          student_id:  selectedStudent.id,
+          fee_type:    feeForm.fee_type_id,
+          amount:      feeForm.amount   || undefined,
+          due_date:    feeForm.due_date || null,
+        };
+        await postData("/fees/fees/", payload);
+      }
       toast("success", feeForm.id ? "Frais modifié." : "Frais attribué.");
       setFeeForm({ id:null, fee_type_id:"", amount:"", due_date:"" });
       await fetchFees(selectedStudent.id, !feesShowAll);
       fetchStats();
-    } catch { toast("error", "Erreur lors de l'enregistrement."); }
+    } catch (err) {
+      // Afficher le détail de l'erreur backend si disponible
+      const detail = err?.response?.data?.detail
+        || (typeof err?.response?.data === "object" ? JSON.stringify(err.response.data) : null)
+        || "Erreur lors de l'enregistrement.";
+      toast("error", detail);
+    }
     finally { setSaving(false); }
   };
 
@@ -684,11 +693,11 @@ const StudentsWithFeesInner = () => {
     setSaving(true);
     try {
       await postData("/fees/payments/", {
-        fee: selectedFee.id,
-        amount: paymentForm.amount,
-        method: paymentForm.method || "CASH",
+        fee:       selectedFee.id,
+        amount:    paymentForm.amount,
+        method:    paymentForm.method || "CASH",
         reference: paymentForm.reference || "",
-        note: paymentForm.note || "",
+        note:      paymentForm.note || "",
       });
       toast("success", "Paiement enregistré !");
       await fetchPayments(selectedFee.id);
@@ -714,15 +723,28 @@ const StudentsWithFeesInner = () => {
   };
 
   const submitAmount = async () => {
+    // ✅ FIX : level est l'ID d'un Level, pas d'une classe
     if (!currentAmount.amount || !currentAmount.level) return toast("error", "Niveau et montant requis.");
     setSaving(true);
     try {
-      if (currentAmount.id) await patchData(`/fees/fee-amounts/${currentAmount.id}/`, currentAmount);
-      else                  await postData("/fees/fee-amounts/", currentAmount);
+      // Payload pour FeeTypeAmountSerializer : { fee_type, level, amount, is_active }
+      const payload = {
+        fee_type:  currentAmount.fee_type,
+        level:     currentAmount.level,   // ID du Level (pas SchoolClass)
+        amount:    currentAmount.amount,
+        is_active: currentAmount.is_active,
+      };
+      if (currentAmount.id) await patchData(`/fees/fee-type-amounts/${currentAmount.id}/`, payload);
+      else                  await postData("/fees/fee-type-amounts/", payload);
       toast("success", currentAmount.id ? "Montant mis à jour." : "Montant ajouté.");
       setAmountOpen(false);
       await fetchLookups();
-    } catch { toast("error", "Erreur enregistrement montant."); }
+    } catch (err) {
+      const detail = err?.response?.data?.detail
+        || (typeof err?.response?.data === "object" ? JSON.stringify(err.response.data) : null)
+        || "Erreur enregistrement montant.";
+      toast("error", detail);
+    }
     finally { setSaving(false); }
   };
 
@@ -793,8 +815,7 @@ const StudentsWithFeesInner = () => {
           {/* Filtres */}
           <div style={{
             borderRadius:14, padding:"14px 18px",
-            background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
-            boxShadow:T.cardShadow,
+            background:T.cardBg, border:`1.5px solid ${T.cardBorder}`, boxShadow:T.cardShadow,
           }}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
               <Sel label="Classe" icon={FaLayerGroup}
@@ -820,7 +841,6 @@ const StudentsWithFeesInner = () => {
             </div>
           </div>
 
-          {/* Compteur */}
           {students.length > 0 && (
             <p style={{ fontSize:11, fontWeight:700, color:T.textMuted, paddingLeft:2 }}>
               {students.length} élève{students.length > 1 ? "s" : ""} affiché{students.length > 1 ? "s" : ""}
@@ -876,17 +896,15 @@ const StudentsWithFeesInner = () => {
         {/* ── COLONNE DROITE (sticky) ── */}
         <div style={{ position:"sticky", top:72, display:"flex", flexDirection:"column", gap:14 }}>
 
-          {/* Stats dashboard */}
+          {/* Stats */}
           <div style={{
             borderRadius:14, padding:"14px 16px",
-            background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
-            boxShadow:T.cardShadow,
+            background:T.cardBg, border:`1.5px solid ${T.cardBorder}`, boxShadow:T.cardShadow,
           }}>
             <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
               letterSpacing:"0.09em", color:T.textMuted, marginBottom:12 }}>
               Tableau de bord
             </p>
-
             {loadingStats ? (
               <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                 {[...Array(3)].map((_, i) => (
@@ -896,14 +914,10 @@ const StudentsWithFeesInner = () => {
               </div>
             ) : (
               <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                <StatCard label="Total attendu" value={formatCurrency(expected)}
-                  icon={FaWallet} color={COL.from} />
-                <StatCard label="Encaissé" value={formatCurrency(totalPaid)}
-                  icon={FaCheck} color="#10b981"
-                  pct={pct} />
+                <StatCard label="Total attendu" value={formatCurrency(expected)} icon={FaWallet} color={COL.from} />
+                <StatCard label="Encaissé" value={formatCurrency(totalPaid)} icon={FaCheck} color="#10b981" pct={pct} />
                 <StatCard label="Reste à recouvrer" value={formatCurrency(remaining)}
-                  icon={FaHistory} color="#f59e0b"
-                  sub={`${(100 - pct).toFixed(1)}% restant`} />
+                  icon={FaHistory} color="#f59e0b" sub={`${(100 - pct).toFixed(1)}% restant`} />
               </div>
             )}
           </div>
@@ -911,12 +925,10 @@ const StudentsWithFeesInner = () => {
           {/* Types de frais */}
           <div style={{
             borderRadius:14, overflow:"hidden",
-            background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
-            boxShadow:T.cardShadow,
+            background:T.cardBg, border:`1.5px solid ${T.cardBorder}`, boxShadow:T.cardShadow,
           }}>
             <div style={{
-              padding:"12px 14px",
-              borderBottom:`1px solid ${T.divider}`,
+              padding:"12px 14px", borderBottom:`1px solid ${T.divider}`,
               display:"flex", alignItems:"center", justifyContent:"space-between",
               background: dark ? "rgba(255,255,255,0.02)" : `${COL.from}06`,
             }}>
@@ -946,7 +958,6 @@ const StudentsWithFeesInner = () => {
                 const exp = expandedFT.has(String(ft.id));
                 return (
                   <div key={ft.id} style={{ borderBottom:`1px solid ${T.divider}` }}>
-                    {/* Row cliquable */}
                     <div
                       onClick={() => setExpandedFT((p) => {
                         const c = new Set(p);
@@ -955,11 +966,8 @@ const StudentsWithFeesInner = () => {
                       })}
                       style={{
                         padding:"10px 14px", cursor:"pointer",
-                        display:"flex", alignItems:"center", gap:10,
-                        transition:"background .12s",
-                        background: exp
-                          ? (dark ? `${COL.from}12` : `${COL.from}07`)
-                          : "transparent",
+                        display:"flex", alignItems:"center", gap:10, transition:"background .12s",
+                        background: exp ? (dark ? `${COL.from}12` : `${COL.from}07`) : "transparent",
                       }}
                       onMouseEnter={(e) => !exp && (e.currentTarget.style.background=dark?"rgba(255,255,255,0.03)":"rgba(0,0,0,0.015)")}
                       onMouseLeave={(e) => !exp && (e.currentTarget.style.background="transparent")}>
@@ -979,12 +987,10 @@ const StudentsWithFeesInner = () => {
                       </div>
                       <FaChevronDown style={{
                         width:8,height:8, color:T.textMuted, flexShrink:0,
-                        transform: exp ? "rotate(180deg)" : "rotate(0)",
-                        transition:"transform .2s",
+                        transform: exp ? "rotate(180deg)" : "rotate(0)", transition:"transform .2s",
                       }} />
                     </div>
 
-                    {/* Contenu déroulé */}
                     {exp && (
                       <div style={{
                         padding:"10px 14px",
@@ -1003,7 +1009,10 @@ const StudentsWithFeesInner = () => {
                             <FaEdit style={{ width:9,height:9 }} /> Modifier
                           </button>
                           <button
-                            onClick={() => { setCurrentAmount({ id:null, fee_type:ft.id, level:"", amount:"", is_active:true }); setAmountOpen(true); }}
+                            onClick={() => {
+                              setCurrentAmount({ id:null, fee_type:ft.id, level:"", amount:"", is_active:true });
+                              setAmountOpen(true);
+                            }}
                             style={{
                               flex:1, padding:"5px 8px", borderRadius:7,
                               border:"none", cursor:"pointer",
@@ -1025,13 +1034,21 @@ const StudentsWithFeesInner = () => {
                               {a.level_name || a.level?.name || a.level}
                             </span>
                             <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                              <span style={{
-                                fontSize:10, fontWeight:800, color:COL.from,
-                                fontVariantNumeric:"tabular-nums",
-                              }}>
+                              <span style={{ fontSize:10, fontWeight:800, color:COL.from,
+                                fontVariantNumeric:"tabular-nums" }}>
                                 {formatCurrency(a.amount)}
                               </span>
-                              <button onClick={() => { setCurrentAmount(a); setAmountOpen(true); }}
+                              <button onClick={() => {
+                                // ✅ FIX : pré-remplir avec l'ID du level (a.level est l'ID)
+                                setCurrentAmount({
+                                  id:        a.id,
+                                  fee_type:  ft.id,
+                                  level:     a.level,
+                                  amount:    a.amount,
+                                  is_active: a.is_active,
+                                });
+                                setAmountOpen(true);
+                              }}
                                 style={{
                                   width:22, height:22, borderRadius:6, border:"none",
                                   background:`${COL.from}18`, cursor:"pointer",
@@ -1142,8 +1159,7 @@ const StudentsWithFeesInner = () => {
                       display:"flex", alignItems:"center", gap:6,
                       padding:"9px 14px", borderRadius:10, border:"none", cursor:"pointer",
                       fontSize:12, fontWeight:800, color:"#fff",
-                      background: saving ? T.textMuted
-                        : `linear-gradient(135deg,${COL.from},${COL.to})`,
+                      background: saving ? T.textMuted : `linear-gradient(135deg,${COL.from},${COL.to})`,
                       boxShadow: saving ? "none" : `0 4px 12px ${COL.shadow}`,
                       whiteSpace:"nowrap",
                     }}>
@@ -1182,8 +1198,7 @@ const StudentsWithFeesInner = () => {
                       padding:"5px 12px", borderRadius:7, border:"none", cursor:"pointer",
                       fontSize:11, fontWeight:700, transition:"all .15s",
                       background: feesShowAll === val
-                        ? `linear-gradient(135deg,${COL.from},${COL.to})`
-                        : "transparent",
+                        ? `linear-gradient(135deg,${COL.from},${COL.to})` : "transparent",
                       color: feesShowAll === val ? "#fff" : T.textMuted,
                       boxShadow: feesShowAll === val ? `0 2px 8px ${COL.shadow}` : "none",
                     }}>
@@ -1225,7 +1240,9 @@ const StudentsWithFeesInner = () => {
                   </thead>
                   <tbody>
                     {fees.map((f, idx) => {
-                      const isPaid = !!f.paid || f.total_remaining === 0;
+                      // ✅ FIX : isPaid basé UNIQUEMENT sur total_remaining (pas sur f.paid qui est stale)
+                      // Après un PATCH sur amount, total_remaining est recalculé par l'API (annoté)
+                      const isPaid = Number(f.total_remaining) <= 0;
                       const isOverdue = !isPaid && f.due_date && new Date(f.due_date) < new Date();
                       const even = idx % 2 === 0;
                       return (
@@ -1287,7 +1304,13 @@ const StudentsWithFeesInner = () => {
                                   <FaMoneyBillWave style={{ width:10,height:10 }} />
                                 </button>
                               )}
-                              <button onClick={() => setFeeForm({ id:f.id, fee_type_id:f.fee_type, amount:f.amount, due_date:f.due_date||"" })}
+                              {/* ✅ FIX : pré-remplir fee_type_id avec l'ID (f.fee_type = integer ID) */}
+                              <button onClick={() => setFeeForm({
+                                id:          f.id,
+                                fee_type_id: f.fee_type,
+                                amount:      f.amount,
+                                due_date:    f.due_date || "",
+                              })}
                                 title="Modifier"
                                 style={{
                                   width:28, height:28, borderRadius:7, border:"none", cursor:"pointer",
@@ -1324,13 +1347,12 @@ const StudentsWithFeesInner = () => {
         )}
       </Modal>
 
-      {/* ─── MODAL PAIEMENT (z=200 — au-dessus du dossier) ─── */}
+      {/* ─── MODAL PAIEMENT (z=200) ─── */}
       <Modal isOpen={paymentsOpen} onClose={() => setPaymentsOpen(false)}
         title={selectedFee ? `Paiement · ${selectedFee.fee_type_name || "Frais"}` : "Nouveau Paiement"}
         icon={FaMoneyBillWave} width={480} zIndex={200}>
         <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
 
-          {/* Résumé du frais */}
           {selectedFee && (
             <div style={{
               display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8,
@@ -1339,9 +1361,9 @@ const StudentsWithFeesInner = () => {
               border:`1.5px solid ${T.cardBorder}`,
             }}>
               {[
-                { label:"Total",      val:selectedFee.amount,        color:T.textPrimary },
-                { label:"Déjà payé",  val:selectedFee.total_paid,    color:"#10b981" },
-                { label:"Reste",      val:selectedFee.total_remaining, color:"#f59e0b", bold:true },
+                { label:"Total",     val:selectedFee.amount,          color:T.textPrimary },
+                { label:"Déjà payé", val:selectedFee.total_paid,      color:"#10b981" },
+                { label:"Reste",     val:selectedFee.total_remaining,  color:"#f59e0b", bold:true },
               ].map(({ label, val, color, bold }, i) => (
                 <div key={i} style={{ textAlign:"center" }}>
                   <p style={{ fontSize:9, fontWeight:700, color:T.textMuted,
@@ -1356,14 +1378,12 @@ const StudentsWithFeesInner = () => {
             </div>
           )}
 
-          {/* Montant */}
           <Input label="Montant du versement (FCFA)" icon={FaCoins}
             type="number" placeholder="0"
             value={paymentForm.amount}
             onChange={(e) => setPaymentForm((p) => ({ ...p, amount:e.target.value }))}
             accent={COL.from} />
 
-          {/* Méthode */}
           <div>
             <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
               letterSpacing:"0.08em", color:T.textMuted, marginBottom:8 }}>
@@ -1371,8 +1391,8 @@ const StudentsWithFeesInner = () => {
             </p>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8 }}>
               {[
-                { id:"CASH",         icon:FaCoins,     label:"Espèces" },
-                { id:"MOBILE_MONEY", icon:FaMobileAlt, label:"Mobile" },
+                { id:"CASH",         icon:FaCoins,      label:"Espèces" },
+                { id:"MOBILE_MONEY", icon:FaMobileAlt,  label:"Mobile" },
                 { id:"BANK",         icon:FaUniversity, label:"Banque" },
               ].map(({ id, icon:Icon, label }) => {
                 const active = paymentForm.method === id;
@@ -1380,11 +1400,8 @@ const StudentsWithFeesInner = () => {
                   <button key={id} onClick={() => setPaymentForm((p) => ({ ...p, method:id }))}
                     style={{
                       display:"flex", flexDirection:"column", alignItems:"center", gap:6,
-                      padding:"11px 8px", borderRadius:10, border:"none", cursor:"pointer",
-                      transition:"all .15s",
-                      background: active
-                        ? `linear-gradient(135deg,${COL.from},${COL.to})`
-                        : T.inputBg,
+                      padding:"11px 8px", borderRadius:10, cursor:"pointer", transition:"all .15s",
+                      background: active ? `linear-gradient(135deg,${COL.from},${COL.to})` : T.inputBg,
                       border:`1.5px solid ${active ? "transparent" : T.inputBorder}`,
                       color: active ? "#fff" : T.textMuted,
                       boxShadow: active ? `0 4px 12px ${COL.shadow}` : "none",
@@ -1398,13 +1415,11 @@ const StudentsWithFeesInner = () => {
             </div>
           </div>
 
-          {/* Référence */}
           <Input label="Référence (optionnel)" icon={FaShieldAlt}
             placeholder="N° chèque, ID transaction…"
             value={paymentForm.reference}
             onChange={(e) => setPaymentForm((p) => ({ ...p, reference:e.target.value }))} />
 
-          {/* Note */}
           <div>
             <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
               letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>
@@ -1419,22 +1434,19 @@ const StudentsWithFeesInner = () => {
                 fontSize:12, borderRadius:10, outline:"none",
                 resize:"vertical", minHeight:68, lineHeight:1.5,
                 background:T.inputBg, color:T.textPrimary,
-                border:`1.5px solid ${T.inputBorder}`, transition:"all .15s",
-                fontFamily:"inherit",
+                border:`1.5px solid ${T.inputBorder}`, transition:"all .15s", fontFamily:"inherit",
               }}
               onFocus={(e) => (e.target.style.borderColor=COL.from)}
               onBlur={(e)  => (e.target.style.borderColor=T.inputBorder)} />
           </div>
 
-          {/* Bouton confirmer */}
           <button onClick={submitPayment} disabled={saving}
             style={{
               width:"100%", display:"flex", alignItems:"center",
               justifyContent:"center", gap:8, padding:"13px 16px",
               borderRadius:12, border:"none", cursor: saving?"not-allowed":"pointer",
               fontSize:13, fontWeight:800, color:"#fff",
-              background: saving ? T.textMuted
-                : `linear-gradient(135deg,${COL.from},${COL.to})`,
+              background: saving ? T.textMuted : `linear-gradient(135deg,${COL.from},${COL.to})`,
               boxShadow: saving ? "none" : `0 6px 20px ${COL.shadow}`,
             }}>
             {saving ? <FaSyncAlt style={{ width:13,height:13 }} className="animate-spin" />
@@ -1442,15 +1454,13 @@ const StudentsWithFeesInner = () => {
             {saving ? "Traitement…" : "Confirmer le paiement"}
           </button>
 
-          {/* Historique paiements */}
           <div>
             <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
               letterSpacing:"0.08em", color:T.textMuted, marginBottom:8 }}>
               Historique pour ce frais
             </p>
             {loadingPayments ? (
-              <div style={{ height:48, borderRadius:10, background:T.inputBg }}
-                className="animate-pulse" />
+              <div style={{ height:48, borderRadius:10, background:T.inputBg }} className="animate-pulse" />
             ) : payments.length === 0 ? (
               <div style={{
                 padding:"16px 14px", textAlign:"center", borderRadius:10,
@@ -1474,8 +1484,7 @@ const StudentsWithFeesInner = () => {
                       <div style={{
                         width:28, height:28, borderRadius:8, flexShrink:0,
                         background:`${COL.from}18`,
-                        display:"flex", alignItems:"center", justifyContent:"center",
-                        color:COL.from,
+                        display:"flex", alignItems:"center", justifyContent:"center", color:COL.from,
                       }}>
                         <FaReceipt style={{ width:10,height:10 }} />
                       </div>
@@ -1532,22 +1541,19 @@ const StudentsWithFeesInner = () => {
               onFocus={(e) => (e.target.style.borderColor=COL.from)}
               onBlur={(e)  => (e.target.style.borderColor=T.inputBorder)} />
           </div>
-          {/* Toggle actif */}
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
             <button onClick={() => setCurrentFeeType((p) => ({ ...p, is_active:!p.is_active }))}
               style={{
                 width:40, height:22, borderRadius:999, border:"none", cursor:"pointer",
                 transition:"all .2s",
                 background: currentFeeType.is_active
-                  ? `linear-gradient(135deg,${COL.from},${COL.to})`
-                  : T.inputBg,
+                  ? `linear-gradient(135deg,${COL.from},${COL.to})` : T.inputBg,
                 boxShadow: currentFeeType.is_active ? `0 2px 8px ${COL.shadow}` : "none",
                 position:"relative",
               }}>
               <div style={{
                 position:"absolute", top:2, width:18, height:18, borderRadius:999,
-                background:"#fff", boxShadow:"0 1px 4px rgba(0,0,0,.2)",
-                transition:"left .2s",
+                background:"#fff", boxShadow:"0 1px 4px rgba(0,0,0,.2)", transition:"left .2s",
                 left: currentFeeType.is_active ? "calc(100% - 20px)" : 2,
               }} />
             </button>
@@ -1561,8 +1567,7 @@ const StudentsWithFeesInner = () => {
               justifyContent:"center", gap:8, padding:"11px 16px",
               borderRadius:12, border:"none", cursor: saving?"not-allowed":"pointer",
               fontSize:13, fontWeight:800, color:"#fff",
-              background: saving ? T.textMuted
-                : `linear-gradient(135deg,${COL.from},${COL.to})`,
+              background: saving ? T.textMuted : `linear-gradient(135deg,${COL.from},${COL.to})`,
               boxShadow: saving ? "none" : `0 4px 16px ${COL.shadow}`,
             }}>
             {saving ? <FaSyncAlt style={{ width:12,height:12 }} className="animate-spin" />
@@ -1577,13 +1582,18 @@ const StudentsWithFeesInner = () => {
         title={currentAmount.id ? "Modifier le montant" : "Ajouter un montant"}
         icon={FaCoins} width={380} zIndex={150}>
         <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          {/* ✅ FIX : utiliser les NIVEAUX (Level) et pas les classes (SchoolClass) */}
           <Sel label="Niveau *" icon={FaLayerGroup}
             value={currentAmount.level}
             onChange={(e) => setCurrentAmount((p) => ({ ...p, level:e.target.value }))}>
             <option value="">— Choisir un niveau —</option>
-            {/* Les classes servent de proxy si les niveaux ne sont pas une entité séparée */}
-            {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {levels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </Sel>
+          {levels.length === 0 && (
+            <p style={{ fontSize:10, color:"#f59e0b", fontStyle:"italic" }}>
+              ⚠ Aucun niveau chargé. Vérifiez l'endpoint <code>/academics/levels/</code>.
+            </p>
+          )}
           <Input label="Montant (FCFA) *" icon={FaCoins}
             type="number" placeholder="0"
             value={currentAmount.amount}
@@ -1594,8 +1604,7 @@ const StudentsWithFeesInner = () => {
               justifyContent:"center", gap:8, padding:"11px 16px",
               borderRadius:12, border:"none", cursor: saving?"not-allowed":"pointer",
               fontSize:13, fontWeight:800, color:"#fff",
-              background: saving ? T.textMuted
-                : `linear-gradient(135deg,${COL.from},${COL.to})`,
+              background: saving ? T.textMuted : `linear-gradient(135deg,${COL.from},${COL.to})`,
               boxShadow: saving ? "none" : `0 4px 16px ${COL.shadow}`,
             }}>
             {saving ? <FaSyncAlt style={{ width:12,height:12 }} className="animate-spin" />

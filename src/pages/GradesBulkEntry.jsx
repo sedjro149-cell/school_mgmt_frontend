@@ -7,6 +7,7 @@
 //    • gradesMapRef → jamais de closure périmée dans les fonctions de save
 //    • dirtySetRef (Set) → jamais de stale dirty check
 //    • ToastProvider externe supprimé → toast local
+//    • Formule moyenne corrigée : (moy_interros + d1 + d2) / 3
 // ─────────────────────────────────────────────────────────────────────────────
 import React, {
   useCallback, useEffect, useLayoutEffect,
@@ -24,7 +25,7 @@ import {
   SECTION_PALETTE, BASE_KEYFRAMES,
 } from "./theme";
 
-const COL = SECTION_PALETTE.academic; // blue → cyan
+const COL = SECTION_PALETTE.academic;
 
 /* ──────────────────────────────────────────────────────────────
    CONSTANTES
@@ -56,10 +57,30 @@ const clampGrade = (v) => {
 
 const fmtVal = (n) => (n == null ? "" : String(n));
 
+/* Moyenne simple d'un tableau (filtre les nulls) */
 const calcAvg = (nums) => {
   const vals = (nums || []).filter(x => x != null && x !== "");
   if (!vals.length) return null;
   return Math.round(vals.reduce((a, b) => a + Number(b), 0) / vals.length * 100) / 100;
+};
+
+/**
+ * ✅ FIX FORMULE MOYENNE GÉNÉRALE
+ * Formule correcte : (moyenne_interros + d1 + d2) / 3
+ *
+ * La moyenne des interrogations est calculée sur les valeurs présentes.
+ * Les trois composantes (moyI, d1, d2) sont divisées par 3 au total.
+ * Si une composante est absente, elle n'entre pas dans le calcul.
+ * Si tout est vide → null.
+ */
+const calcWeightedAvg = (i1, i2, i3, d1, d2) => {
+  const moyI = calcAvg([i1, i2, i3]);
+  const parts = [];
+  if (moyI != null) parts.push(moyI);
+  if (d1   != null) parts.push(Number(d1));
+  if (d2   != null) parts.push(Number(d2));
+  if (!parts.length) return null;
+  return Math.round(parts.reduce((a, b) => a + b, 0) / 3 * 100) / 100;
 };
 
 const buildQuery = (obj = {}) => {
@@ -174,8 +195,6 @@ const ResultModal = ({ open, onClose, results }) => {
         border:`1.5px solid ${T.cardBorder}`,
       }}>
         <div style={{ height:4, background:`linear-gradient(90deg,${COL.from},${COL.to})`, flexShrink:0 }} />
-
-        {/* Header */}
         <div style={{
           display:"flex", alignItems:"center", gap:10, padding:"14px 18px",
           borderBottom:`1px solid ${T.divider}`, flexShrink:0,
@@ -196,12 +215,11 @@ const ResultModal = ({ open, onClose, results }) => {
               {counts.created} créé{counts.created!==1?"s":""} · {counts.updated} mis à jour · {counts.error} erreur{counts.error!==1?"s":""}
             </p>
           </div>
-          {/* Mini stats */}
           <div style={{ display:"flex", gap:6 }}>
             {[
-              { label:"Créés",     val:counts.created, color:"#10b981" },
-              { label:"Maj",       val:counts.updated, color:`${COL.from}` },
-              { label:"Erreurs",   val:counts.error,   color:"#ef4444" },
+              { label:"Créés",   val:counts.created, color:"#10b981" },
+              { label:"Maj",     val:counts.updated, color:`${COL.from}` },
+              { label:"Erreurs", val:counts.error,   color:"#ef4444" },
             ].map(({ label, val, color }) => (
               <div key={label} style={{
                 textAlign:"center", padding:"4px 10px", borderRadius:8,
@@ -225,12 +243,10 @@ const ResultModal = ({ open, onClose, results }) => {
           </button>
         </div>
 
-        {/* Tableau */}
         <div style={{
           flex:1, overflowY:"auto",
           scrollbarWidth:"thin", scrollbarColor:`${COL.from} transparent`,
         }}>
-          {/* En-tête tableau */}
           <div style={{
             display:"grid", gridTemplateColumns:"1fr 1fr 100px 1fr",
             gap:0, padding:"8px 16px",
@@ -309,11 +325,7 @@ const ResultModal = ({ open, onClose, results }) => {
 };
 
 /* ──────────────────────────────────────────────────────────────
-   GRADE CELL — Mémoïsé, autosave sur blur de la cellule entière
-   ─────────────────────────────────────────────────────────────
-   BUG FIX #1 : type="text" + onWheel → plus de modification par molette
-   BUG FIX #2 : onBlur sur le container (relatedTarget check) → autosave
-                uniquement quand focus QUITTE la cellule, pas entre champs
+   GRADE CELL
 ────────────────────────────────────────────────────────────── */
 const GradeCell = memo(function GradeCell({
   studentId, subjectId,
@@ -327,14 +339,17 @@ const GradeCell = memo(function GradeCell({
   const errs = errors    || {};
   const hasErrors = Object.keys(errs).length > 0;
 
-  const avgI   = calcAvg([g.interrogation1, g.interrogation2, g.interrogation3]);
-  const avgD   = calcAvg([g.devoir1, g.devoir2]);
-  const avgTot = calcAvg([g.interrogation1, g.interrogation2, g.interrogation3, g.devoir1, g.devoir2]);
+  const avgI = calcAvg([g.interrogation1, g.interrogation2, g.interrogation3]);
+  const avgD = calcAvg([g.devoir1, g.devoir2]);
+
+  // ✅ FIX : formule correcte (moy_interros + d1 + d2) / 3
+  const avgTot  = calcWeightedAvg(
+    g.interrogation1, g.interrogation2, g.interrogation3,
+    g.devoir1, g.devoir2,
+  );
   const avgColor = colorForGrade(avgTot);
 
-  /* BUG FIX #2 : blur du CONTENEUR, pas de chaque input individuel */
   const handleContainerBlur = (e) => {
-    /* Ne sauvegarder que si focus quitte la cellule entière */
     if (!e.currentTarget.contains(e.relatedTarget)) {
       onCellBlur(studentId, subjectId);
     }
@@ -356,7 +371,6 @@ const GradeCell = memo(function GradeCell({
         minWidth:220,
       }}>
 
-      {/* Indicateur d'état */}
       <div style={{
         position:"absolute", top:7, right:7,
         display:"flex", alignItems:"center", gap:3,
@@ -377,7 +391,6 @@ const GradeCell = memo(function GradeCell({
         )}
       </div>
 
-      {/* Labels groupes */}
       <div style={{
         display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:3, marginBottom:3,
       }}>
@@ -392,12 +405,6 @@ const GradeCell = memo(function GradeCell({
         ))}
       </div>
 
-      {/* Inputs ──────────────────────────────────────────────
-          BUG FIX #1 :
-          • type="text"  → le navigateur ne capte plus la molette
-          • inputMode="decimal" → clavier numérique sur mobile
-          • onWheel={(e) => e.currentTarget.blur()} → ceinture + bretelles
-      ─────────────────────────────────────────────────────── */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:3 }}>
         {GRADE_FIELDS.map(({ key, group }) => {
           const hasErr = !!errs[key];
@@ -410,13 +417,11 @@ const GradeCell = memo(function GradeCell({
               pattern="[0-9.]*"
               value={fmtVal(g[key])}
               placeholder="—"
-              /* ────── BUG FIX #1 : molette ────── */
               onWheel={(e) => e.currentTarget.blur()}
               onChange={(e) => onFieldChange(studentId, subjectId, key, e.target.value)}
               onFocus={(e) => {
                 e.currentTarget.style.borderColor = hasErr ? "#ef4444" : ac;
                 e.currentTarget.style.boxShadow   = `0 0 0 3px ${hasErr?"#ef444422":ac+"22"}`;
-                /* Sélectionner le contenu pour faciliter la ressaisie */
                 e.currentTarget.select();
               }}
               onBlur={(e) => {
@@ -481,7 +486,6 @@ const GradeCell = memo(function GradeCell({
         )}
       </div>
 
-      {/* Erreur saisie */}
       {hasErrors && (
         <div style={{
           marginTop:5, display:"flex", alignItems:"center", gap:4,
@@ -505,33 +509,28 @@ const GradesInner = () => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
 
-  /* ── Data ── */
   const [classes,    setClasses]    = useState([]);
   const [students,   setStudents]   = useState([]);
   const [subjects,   setSubjects]   = useState([]);
   const [loading,    setLoading]    = useState(false);
   const [subNote,    setSubNote]    = useState(null);
 
-  /* ── Sélecteurs ── */
   const [classId, setClassId] = useState("");
   const [term,    setTerm]    = useState("T1");
 
-  /* ── Grades ── */
   const [gradesMap,  setGradesMap]  = useState({});
   const [cellErrors, setCellErrors] = useState({});
   const [dirtyMap,   setDirtyMap]   = useState({});
   const [savingMap,  setSavingMap]  = useState({});
 
-  /* ── Refs anti-stale-closure ── */
   const gradesMapRef   = useRef(gradesMap);
   const cellErrorsRef  = useRef(cellErrors);
-  const dirtySetRef    = useRef(new Set());   // ← BUG FIX #2 : Set toujours à jour
+  const dirtySetRef    = useRef(new Set());
   const termRef        = useRef(term);
   useEffect(() => { gradesMapRef.current  = gradesMap;  }, [gradesMap]);
   useEffect(() => { cellErrorsRef.current = cellErrors; }, [cellErrors]);
   useEffect(() => { termRef.current       = term;       }, [term]);
 
-  /* ── UI ── */
   const [msg,           setMsg]           = useState(null);
   const [resultOpen,    setResultOpen]    = useState(false);
   const [saveResults,   setSaveResults]   = useState([]);
@@ -541,7 +540,6 @@ const GradesInner = () => {
 
   const toast = (type, text) => setMsg({ type, text });
 
-  /* ── Measure header ── */
   useLayoutEffect(() => {
     const measure = () => {
       if (headerRef.current) setHeaderH(headerRef.current.getBoundingClientRect().height);
@@ -551,7 +549,6 @@ const GradesInner = () => {
     return () => window.removeEventListener("resize", measure);
   }, []);
 
-  /* ── Chargement classes ── */
   useEffect(() => {
     (async () => {
       try {
@@ -561,7 +558,6 @@ const GradesInner = () => {
     })();
   }, []);
 
-  /* ── Rechargement principal ── */
   const reloadClass = useCallback(async (cId, termArg) => {
     if (!cId) return;
     setLoading(true); setSubNote(null);
@@ -570,11 +566,9 @@ const GradesInner = () => {
     dirtySetRef.current.clear();
 
     try {
-      /* 1. Élèves */
       const stData = await fetchData(`/core/admin/students/by-class/${cId}/`);
       setStudents(Array.isArray(stData) ? stData : []);
 
-      /* 2. Matières */
       let normalizedSubs = [];
       try {
         const subRes = await fetchData(`/academics/class-subjects/by-class/${cId}/`);
@@ -596,7 +590,6 @@ const GradesInner = () => {
         }
       } catch { setSubNote("Impossible de charger les matières."); }
 
-      /* 3. Notes */
       try {
         const q = buildQuery({ school_class: cId, term: termArg });
         const gres = await fetchData(`/academics/grades/${q}`);
@@ -627,23 +620,16 @@ const GradesInner = () => {
 
   useEffect(() => { reloadClass(classId, term); }, [classId, term, reloadClass]);
 
-  /* ──────────────────────────────────────────────────────────
-     BUG FIX CORE :
-     handleFieldChange — mise à jour locale SANS déclencher de save
-     handleCellBlur   — déclenche le save uniquement quand focus quitte la cellule
-  ────────────────────────────────────────────────────────── */
   const handleFieldChange = useCallback((studentId, subjectId, field, raw) => {
     const key    = gradeKey(String(studentId), String(subjectId));
     const parsed = raw === "" ? null : parseFloat(raw);
 
-    /* Validation */
     let err = null;
     if (raw !== "" && raw !== null) {
-      if (Number.isNaN(parsed))          err = "Valeur numérique requise";
+      if (Number.isNaN(parsed))           err = "Valeur numérique requise";
       else if (parsed < 0 || parsed > 20) err = "La note doit être entre 0 et 20";
     }
 
-    /* Mise à jour grade map */
     setGradesMap(prev => {
       const existing = prev[key] || {
         id: null,
@@ -656,7 +642,6 @@ const GradesInner = () => {
       return gradesMapRef.current;
     });
 
-    /* Erreurs */
     setCellErrors(prev => {
       const copy = { ...prev };
       const cellErr = copy[key] ? { ...copy[key] } : {};
@@ -667,14 +652,11 @@ const GradesInner = () => {
       return newCell;
     });
 
-    /* Marquer dirty */
-    dirtySetRef.current.add(key);           // ref — toujours à jour
-    setDirtyMap(d => ({ ...d, [key]: true })); // state — pour UI
-  }, []); // deps vides : utilise uniquement des refs et setters stables
+    dirtySetRef.current.add(key);
+    setDirtyMap(d => ({ ...d, [key]: true }));
+  }, []);
 
-  /* ── Save une cellule ── */
   const saveSingleGrade = useCallback(async (key) => {
-    /* Lire depuis la REF — jamais périmé */
     const g = gradesMapRef.current[key];
     if (!g) return;
 
@@ -689,7 +671,6 @@ const GradesInner = () => {
       const r    = (Array.isArray(data?.results) ? data.results : [])[0];
 
       if (r && r.status !== "error") {
-        /* Mettre à jour l'ID si nouvellement créé */
         if (r.id) {
           setGradesMap(prev => {
             const updated = { ...prev, [key]: { ...prev[key], id: r.id } };
@@ -697,7 +678,6 @@ const GradesInner = () => {
             return updated;
           });
         }
-        /* Effacer dirty */
         dirtySetRef.current.delete(key);
         setDirtyMap(d => { const c = { ...d }; delete c[key]; return c; });
       } else if (r?.status === "error") {
@@ -714,12 +694,10 @@ const GradesInner = () => {
     } finally {
       setSavingMap(s => { const c = { ...s }; delete c[key]; return c; });
     }
-  }, []); // deps vides : utilise uniquement des refs et setters stables
+  }, []);
 
-  /* ── BUG FIX #2 : Blur de cellule → save ── */
   const handleCellBlur = useCallback((studentId, subjectId) => {
     const key = gradeKey(String(studentId), String(subjectId));
-    /* Utilise dirtySetRef (toujours à jour, jamais périmé) */
     if (dirtySetRef.current.has(key)) {
       const hasErr = cellErrorsRef.current[key] &&
         Object.keys(cellErrorsRef.current[key]).length > 0;
@@ -727,7 +705,6 @@ const GradesInner = () => {
     }
   }, [saveSingleGrade]);
 
-  /* ── Sauvegarder tout ── */
   const handleSaveAll = useCallback(async () => {
     const payload = [];
     const localErrors = [];
@@ -750,11 +727,9 @@ const GradesInner = () => {
         }
 
         if (!dirtySetRef.current.has(key)) return;
-
         const g = gradesMapRef.current[key];
         if (!g) return;
 
-        /* Ne pas sauvegarder une cellule complètement vide sans ID */
         const hasData = GRADE_FIELDS.some(f => g[f.key] != null);
         if (!hasData && !g.id) return;
 
@@ -777,7 +752,6 @@ const GradesInner = () => {
       const data = await postData("/academics/grades/bulk_upsert/", payload);
       const results = Array.isArray(data?.results) ? data.results : [];
 
-      /* Mettre à jour les IDs et effacer dirty */
       setGradesMap(prev => {
         const copy = { ...prev };
         results.forEach(r => {
@@ -805,7 +779,9 @@ const GradesInner = () => {
     } finally { setLoading(false); }
   }, [students, subjects]);
 
-  /* ── Moyennes de classe par matière (barre de stats) ── */
+  /* ── Moyennes de classe par matière
+     ✅ FIX : utilise calcWeightedAvg pour être cohérent avec l'affichage
+  ── */
   const classAverages = useMemo(() => {
     const map = {};
     subjects.forEach(sub => {
@@ -815,7 +791,11 @@ const GradesInner = () => {
           const key = gradeKey(String(stu.id), String(subjId));
           const g   = gradesMap[key];
           if (!g) return null;
-          return calcAvg([g.interrogation1, g.interrogation2, g.interrogation3, g.devoir1, g.devoir2]);
+          // ✅ FIX : même formule que GradeCell
+          return calcWeightedAvg(
+            g.interrogation1, g.interrogation2, g.interrogation3,
+            g.devoir1, g.devoir2,
+          );
         })
         .filter(v => v != null);
       map[sub.id] = vals.length ? calcAvg(vals) : null;
@@ -843,7 +823,6 @@ const GradesInner = () => {
           maxWidth:1600, margin:"0 auto", padding:"10px 20px",
           display:"flex", alignItems:"center", gap:12, flexWrap:"wrap",
         }}>
-          {/* Titre */}
           <div style={{ display:"flex", alignItems:"center", gap:10, flex:1, minWidth:200 }}>
             <div style={{
               width:38, height:38, borderRadius:11, flexShrink:0,
@@ -878,7 +857,6 @@ const GradesInner = () => {
             </div>
           </div>
 
-          {/* Sélecteur classe */}
           <div style={{ position:"relative" }}>
             <FaUserGraduate style={{
               position:"absolute", left:11, top:"50%", transform:"translateY(-50%)",
@@ -906,7 +884,6 @@ const GradesInner = () => {
             }} />
           </div>
 
-          {/* Sélecteur trimestre */}
           <div style={{
             display:"flex", background:T.inputBg, borderRadius:10, padding:3,
             border:`1.5px solid ${T.inputBorder}`,
@@ -931,14 +908,12 @@ const GradesInner = () => {
 
           <div style={{ width:1, height:28, background:T.divider }} />
 
-          {/* Bouton refresh */}
           <button onClick={() => reloadClass(classId, term)} disabled={!classId || loading}
             style={{
               width:34, height:34, borderRadius:9, border:`1.5px solid ${T.cardBorder}`,
               background:"transparent", cursor:classId?"pointer":"not-allowed",
               display:"flex", alignItems:"center", justifyContent:"center",
-              color:T.textMuted, transition:"all .15s",
-              opacity:!classId?0.4:1,
+              color:T.textMuted, transition:"all .15s", opacity:!classId?0.4:1,
             }}
             onMouseEnter={(e) => classId && (e.currentTarget.style.borderColor=COL.from, e.currentTarget.style.color=COL.from)}
             onMouseLeave={(e) => (e.currentTarget.style.borderColor=T.cardBorder, e.currentTarget.style.color=T.textMuted)}
@@ -946,7 +921,6 @@ const GradesInner = () => {
             <FaSyncAlt style={{ width:12,height:12 }} className={loading?"animate-spin":""} />
           </button>
 
-          {/* Bouton sauvegarder tout */}
           <button onClick={handleSaveAll}
             disabled={pendingCount === 0 || loading}
             style={{
@@ -978,7 +952,6 @@ const GradesInner = () => {
       {/* ═══ CONTENU ═══ */}
       <div style={{ maxWidth:1600, margin:"0 auto", padding:"16px 20px 0" }}>
 
-        {/* Alerte matières */}
         {subNote && (
           <div style={{
             display:"flex", alignItems:"center", gap:10,
@@ -990,12 +963,10 @@ const GradesInner = () => {
           </div>
         )}
 
-        {/* État initial */}
         {!classId ? (
           <div style={{
             padding:"80px 24px", textAlign:"center",
-            border:`2px dashed ${T.cardBorder}`, borderRadius:20,
-            background:T.cardBg,
+            border:`2px dashed ${T.cardBorder}`, borderRadius:20, background:T.cardBg,
           }}>
             <div style={{
               width:64, height:64, borderRadius:18, margin:"0 auto 16px",
@@ -1015,8 +986,7 @@ const GradesInner = () => {
         ) : loading ? (
           <div style={{
             padding:"80px 24px", textAlign:"center",
-            border:`2px dashed ${T.cardBorder}`, borderRadius:20,
-            background:T.cardBg,
+            border:`2px dashed ${T.cardBorder}`, borderRadius:20, background:T.cardBg,
           }}>
             <FaSyncAlt style={{
               width:28,height:28,color:COL.from,margin:"0 auto 14px",
@@ -1030,8 +1000,7 @@ const GradesInner = () => {
         ) : students.length === 0 || subjects.length === 0 ? (
           <div style={{
             padding:"60px 24px", textAlign:"center",
-            border:`2px dashed ${T.cardBorder}`, borderRadius:20,
-            background:T.cardBg,
+            border:`2px dashed ${T.cardBorder}`, borderRadius:20, background:T.cardBg,
           }}>
             <FaExclamationTriangle style={{ width:22,height:22,color:"#f59e0b",margin:"0 auto 12px",display:"block" }} />
             <p style={{ fontSize:13, fontWeight:700, color:T.textSecondary }}>
@@ -1041,13 +1010,11 @@ const GradesInner = () => {
           </div>
 
         ) : (
-          /* ═══ GRILLE PRINCIPALE ═══ */
           <div style={{
             borderRadius:16, overflow:"hidden",
             background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
             boxShadow:T.cardShadow,
           }}>
-            {/* Barre de résumé */}
             <div style={{
               display:"flex", alignItems:"center", justifyContent:"space-between",
               padding:"8px 16px", background:T.tableHead,
@@ -1077,18 +1044,14 @@ const GradesInner = () => {
               )}
             </div>
 
-            {/* Tableau */}
             <div style={{
               overflowX:"auto", overflowY:"auto",
               maxHeight:`calc(100vh - ${headerH + 120}px)`,
               scrollbarWidth:"thin", scrollbarColor:`${COL.from} transparent`,
             }}>
               <table style={{ borderCollapse:"collapse", minWidth:"max-content", width:"100%" }}>
-
-                {/* En-tête */}
                 <thead>
                   <tr>
-                    {/* Colonne Élève — collante */}
                     <th style={{
                       position:"sticky", left:0, top:0, zIndex:40,
                       background:T.tableHead, padding:0,
@@ -1096,9 +1059,7 @@ const GradesInner = () => {
                       borderRight:`1px solid ${T.divider}`,
                       minWidth:220, width:220,
                     }}>
-                      <div style={{
-                        padding:"10px 14px", display:"flex", alignItems:"center", gap:8,
-                      }}>
+                      <div style={{ padding:"10px 14px", display:"flex", alignItems:"center", gap:8 }}>
                         <div style={{
                           width:26, height:26, borderRadius:7,
                           display:"flex", alignItems:"center", justifyContent:"center",
@@ -1113,7 +1074,6 @@ const GradesInner = () => {
                       </div>
                     </th>
 
-                    {/* Colonnes matières */}
                     {subjects.map(sub => (
                       <th key={sub.id} style={{
                         position:"sticky", top:0, zIndex:30,
@@ -1136,7 +1096,6 @@ const GradesInner = () => {
                             }} title={sub.displayName}>
                               {sub.displayName}
                             </p>
-                            {/* Moyenne de classe pour cette matière */}
                             {classAverages[sub.id] != null && (
                               <div style={{
                                 display:"inline-flex", alignItems:"center", gap:4,
@@ -1159,7 +1118,6 @@ const GradesInner = () => {
                   </tr>
                 </thead>
 
-                {/* Corps */}
                 <tbody>
                   {students.map((stu, idx) => {
                     const studentName = `${stu.user?.first_name ?? ""} ${stu.user?.last_name ?? ""}`.trim() || `Élève #${stu.id}`;
@@ -1169,8 +1127,6 @@ const GradesInner = () => {
 
                     return (
                       <tr key={stu.id} style={{ background:rowBg }}>
-
-                        {/* Cellule Élève — collante */}
                         <td style={{
                           position:"sticky", left:0, zIndex:20,
                           background: dark
@@ -1206,7 +1162,6 @@ const GradesInner = () => {
                           </div>
                         </td>
 
-                        {/* Cellules notes */}
                         {subjects.map(sub => {
                           const subjId  = sub.subject_id != null ? sub.subject_id : sub.id;
                           const key     = gradeKey(String(stu.id), String(subjId));
@@ -1240,7 +1195,6 @@ const GradesInner = () => {
         )}
       </div>
 
-      {/* ── Modals & Toast ── */}
       <ResultModal
         open={resultOpen}
         onClose={() => setResultOpen(false)}
