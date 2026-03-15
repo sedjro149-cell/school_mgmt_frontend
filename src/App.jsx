@@ -17,6 +17,7 @@ import Timetable from "./pages/Timetable";
 import TimetableManager from "./pages/TimetableManager";
 import AnnouncementManagement from './pages/AnnouncementManagement';
 import Absences from './pages/Absences';
+import TermManager from "./pages/TermManager";
 
 
 import GenerateTimetable from "./pages/GenerateTimetable";
@@ -54,6 +55,7 @@ function App() {
         <Route path="/academics/timeslots" element={<PrivateRoute element={<TimeSlots />} />} />
         <Route path="/academics/timetable-editor" element={<PrivateRoute element={<TimetableEditor />} />} />
         <Route path="/academics/timetable-manager" element={<PrivateRoute element={<TimetableManager />} />} />
+        <Route path="/academics/term-manager" element={<PrivateRoute element={<TermManager />} />} />
 
         <Route path="/academics/generatetimetable" element={<PrivateRoute element={<GenerateTimetable />} />} />
         <Route path="/academics/timetable" element={<PrivateRoute element={<Timetable />} />} />

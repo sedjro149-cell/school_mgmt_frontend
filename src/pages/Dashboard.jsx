@@ -5,7 +5,7 @@ import {
   FaUsers, FaChalkboardTeacher, FaSchool, FaClock, FaPen,
   FaFileAlt, FaRegChartBar, FaMoneyBillWave, FaLayerGroup,
   FaChartPie, FaHome, FaSyncAlt, FaBolt, FaAngleDown,
-  FaAngleRight, FaMoon, FaSun,
+  FaAngleRight, FaMoon, FaSun, FaCog,
 } from "react-icons/fa";
 import { fetchData } from "./api";
 import usePreventTranslate from "./hooks/usePreventTranslate";
@@ -72,6 +72,7 @@ const DARK = {
 
 /* ═══════════════════════════════════════════
    NAVIGATION SECTIONS
+   ✅ MODIFICATION : ajout de "Gestion Trimestres" dans Académique
 ═══════════════════════════════════════════ */
 const sections = [
   {
@@ -92,6 +93,7 @@ const sections = [
       { title: "Notes",                 link: "/academics/grades",            icon: FaPen },
       { title: "Saisie massive",        link: "/academics/grades/bulk-entry", icon: FaLayerGroup },
       { title: "Bulletins",             link: "/academics/reportcards",       icon: FaRegChartBar },
+      { title: "Gestion trimestres",    link: "/academics/term-manager",      icon: FaCog },
       { title: "Annonces",              link: "/academics/anouncementmgmt",   icon: FaRegChartBar },
       { title: "Présence",              link: "/academics/absences",          icon: FaLayerGroup },
       { title: "Gestion emplois",       link: "/academics/timetable-manager", icon: FaLayerGroup },

@@ -7,10 +7,10 @@ import {
   XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine,
 } from "recharts";
 import {
-  FaGraduationCap, FaUserGraduate, FaLayerGroup, FaBookOpen,
+  FaGraduationCap, FaUserGraduate, FaLayerGroup,
   FaChevronDown, FaSyncAlt, FaTimes, FaCheck, FaExclamationTriangle,
   FaPrint, FaFilePdf, FaMoon, FaSun, FaArrowLeft, FaMedal,
-  FaChartBar, FaTable, FaInfoCircle,
+  FaChartBar, FaLock, FaLockOpen, FaEye, FaInfoCircle,
 } from "react-icons/fa";
 import { fetchData } from "./api";
 import {
@@ -18,11 +18,9 @@ import {
   SECTION_PALETTE, BASE_KEYFRAMES,
 } from "./theme";
 
-const COL = SECTION_PALETTE.tool; // ambre → orange
+const COL = SECTION_PALETTE.tool;
 
-/* ──────────────────────────────────────────────────────────────
-   UTILS
-────────────────────────────────────────────────────────────── */
+/* ── UTILS ── */
 const fmt = (v) =>
   v === null || v === undefined || v === "" ? "—" : String(v).replace(".", ",");
 
@@ -57,7 +55,6 @@ const studentFullName = (s) => {
   return `${fn} ${ln}`.trim() || s.user?.username || `#${s.id}`;
 };
 
-/* ── Mention par moyenne ── */
 const MENTIONS = [
   { min: 16, label:"Très Bien",   from:"#10b981", to:"#059669" },
   { min: 14, label:"Bien",        from:"#22c55e", to:"#16a34a" },
@@ -72,9 +69,13 @@ const mentionFor = (avg) => {
   return MENTIONS.find((m) => n >= m.min) ?? MENTIONS[MENTIONS.length - 1];
 };
 
-/* ──────────────────────────────────────────────────────────────
-   ATOMES
-────────────────────────────────────────────────────────────── */
+const STATUS_META = {
+  draft:     { label:"Brouillon",  color:"#6366f1", bg:"#6366f118", Icon: FaLockOpen },
+  locked:    { label:"Verrouillé", color:"#f59e0b", bg:"#f59e0b18", Icon: FaLock     },
+  published: { label:"Publié",     color:"#10b981", bg:"#10b98118", Icon: FaEye      },
+};
+
+/* ── DARK TOGGLE ── */
 const DarkToggle = () => {
   const { dark, toggle } = useTheme();
   const [hov, setHov] = useState(false);
@@ -102,6 +103,7 @@ const DarkToggle = () => {
   );
 };
 
+/* ── TOAST ── */
 const Toast = ({ msg, onClose }) => {
   useEffect(() => {
     if (msg) { const t = setTimeout(onClose, 5000); return () => clearTimeout(t); }
@@ -126,7 +128,79 @@ const Toast = ({ msg, onClose }) => {
   );
 };
 
-/* Styled select */
+/* ── TERM STATUS BADGE (inline pill) ── */
+const TermStatusBadge = ({ termStatus, size = "sm" }) => {
+  if (!termStatus) return null;
+  const meta = STATUS_META[termStatus.status] || STATUS_META.draft;
+  const { Icon } = meta;
+  const large = size === "lg";
+  return (
+    <span style={{
+      display:"inline-flex", alignItems:"center", gap: large ? 6 : 4,
+      padding: large ? "5px 14px" : "2px 9px",
+      borderRadius:999, fontWeight:800,
+      fontSize: large ? 12 : 10,
+      background: meta.bg, color:meta.color,
+      border:`1.5px solid ${meta.color}33`,
+    }}>
+      <Icon style={{ width: large ? 11 : 9, height: large ? 11 : 9 }} />
+      {meta.label}
+    </span>
+  );
+};
+
+/* ── TERM STATUS NOTICE (in bulletin body) ── */
+const TermStatusNotice = ({ termStatus }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  if (!termStatus || termStatus.status === "published") return null;
+
+  if (termStatus.status === "draft") {
+    return (
+      <div style={{
+        display:"flex", alignItems:"flex-start", gap:10,
+        padding:"10px 14px", borderRadius:10, marginBottom:12,
+        background:"#6366f110", border:"1.5px solid #6366f133",
+      }}>
+        <FaInfoCircle style={{ width:13, height:13, color:"#6366f1", flexShrink:0, marginTop:1 }} />
+        <div>
+          <p style={{ fontSize:11, fontWeight:800, color:"#6366f1" }}>
+            Moyennes non finalisées
+          </p>
+          <p style={{ fontSize:10, color:"#6366f1", opacity:0.8, marginTop:2 }}>
+            Les moyennes affiché es sont provisoires. Elles seront officiellement calculées et figées au verrouillage du trimestre.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (termStatus.status === "locked") {
+    return (
+      <div style={{
+        display:"flex", alignItems:"flex-start", gap:10,
+        padding:"10px 14px", borderRadius:10, marginBottom:12,
+        background:"#f59e0b10", border:"1.5px solid #f59e0b33",
+      }}>
+        <FaLock style={{ width:13, height:13, color:"#f59e0b", flexShrink:0, marginTop:1 }} />
+        <div>
+          <p style={{ fontSize:11, fontWeight:800, color:"#f59e0b" }}>
+            Trimestre verrouillé — en attente de publication
+          </p>
+          <p style={{ fontSize:10, color:"#f59e0b", opacity:0.8, marginTop:2 }}>
+            {termStatus.locked_by_name ? `Verrouillé par ${termStatus.locked_by_name}` : "Verrouillé"}
+            {termStatus.locked_at ? ` · ${new Date(termStatus.locked_at).toLocaleDateString("fr-FR")}` : ""}
+            {" · "}Les moyennes sont définitives.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+};
+
+/* ── STYLED SELECT ── */
 const Sel = ({ icon: Icon, label, children, ...props }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
@@ -174,16 +248,12 @@ const Sel = ({ icon: Icon, label, children, ...props }) => {
   );
 };
 
-/* ──────────────────────────────────────────────────────────────
-   AVERAGE CELL (dans le tableau imprimable)
-────────────────────────────────────────────────────────────── */
+/* ── AVG CELL ── */
 const AvgCell = ({ value, bold, highlight }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
   const n = safeNum(value);
-  if (n === null) return (
-    <span style={{ fontSize:12, color:T.textMuted }}>—</span>
-  );
+  if (n === null) return <span style={{ fontSize:12, color:T.textMuted }}>—</span>;
   const { from } = mentionFor(n);
   const passing = n >= 10;
   return (
@@ -191,9 +261,7 @@ const AvgCell = ({ value, bold, highlight }) => {
       display:"inline-flex", alignItems:"center", justifyContent:"center",
       padding: highlight ? "4px 10px" : "2px 8px",
       borderRadius:8,
-      background: highlight
-        ? (dark ? `${from}22` : `${from}15`)
-        : "transparent",
+      background: highlight ? (dark ? `${from}22` : `${from}15`) : "transparent",
       border: highlight ? `1.5px solid ${from}44` : "none",
       fontWeight: bold ? 800 : 600,
       fontSize: highlight ? 13 : 12,
@@ -205,9 +273,7 @@ const AvgCell = ({ value, bold, highlight }) => {
   );
 };
 
-/* ──────────────────────────────────────────────────────────────
-   CUSTOM TOOLTIP (recharts)
-────────────────────────────────────────────────────────────── */
+/* ── CUSTOM TOOLTIP ── */
 const CustomTooltip = ({ active, payload, label }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
@@ -228,9 +294,7 @@ const CustomTooltip = ({ active, payload, label }) => {
   );
 };
 
-/* ──────────────────────────────────────────────────────────────
-   MENTION BADGE
-────────────────────────────────────────────────────────────── */
+/* ── MENTION BADGE ── */
 const MentionBadge = ({ avg, size = "sm" }) => {
   const m = mentionFor(avg);
   const n = safeNum(avg);
@@ -251,26 +315,38 @@ const MentionBadge = ({ avg, size = "sm" }) => {
   );
 };
 
-/* ──────────────────────────────────────────────────────────────
-   PAGE PRINCIPALE (inner)
-────────────────────────────────────────────────────────────── */
+/* ── PAGE PRINCIPALE ── */
 const ReportCardsInner = () => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
 
-  /* ── State ── */
-  const [classes,        setClasses]        = useState([]);
-  const [loadingClasses, setLoadingClasses] = useState(true);
-  const [classId,        setClassId]        = useState("");
-  const [students,       setStudents]       = useState([]);
-  const [loadingStudents,setLoadingStudents] = useState(false);
-  const [studentId,      setStudentId]      = useState("");
-  const [term,           setTerm]           = useState("T1");
-  const [reportCard,     setReportCard]     = useState(null);
-  const [loadingReport,  setLoadingReport]  = useState(false);
-  const [msg,            setMsg]            = useState(null);
+  const [classes,         setClasses]         = useState([]);
+  const [loadingClasses,  setLoadingClasses]  = useState(true);
+  const [classId,         setClassId]         = useState("");
+  const [students,        setStudents]        = useState([]);
+  const [loadingStudents, setLoadingStudents] = useState(false);
+  const [studentId,       setStudentId]       = useState("");
+  const [term,            setTerm]            = useState("T1");
+  const [reportCard,      setReportCard]      = useState(null);
+  const [loadingReport,   setLoadingReport]   = useState(false);
+  const [msg,             setMsg]             = useState(null);
+  const [termStatus,      setTermStatus]      = useState(null);
 
   const printableRef = useRef(null);
+
+  /* ── fetchTermStatus ── */
+  const fetchTermStatus = useCallback(async (cls, t) => {
+    if (!cls || !t) { setTermStatus(null); return; }
+    try {
+      const data = await fetchData(`/academics/term-status/?school_class=${cls}&term=${t}`);
+      const list = Array.isArray(data) ? data : (data?.results ?? []);
+      setTermStatus(list.length ? list[0] : null);
+    } catch { setTermStatus(null); }
+  }, []);
+
+  useEffect(() => {
+    fetchTermStatus(classId, term);
+  }, [classId, term, fetchTermStatus]);
 
   /* ── Fetch classes ── */
   const fetchClasses = useCallback(async () => {
@@ -289,8 +365,7 @@ const ReportCardsInner = () => {
   /* ── Fetch élèves ── */
   const fetchStudents = useCallback(async (cid) => {
     if (!cid) { setStudents([]); return; }
-    setLoadingStudents(true);
-    setStudents([]);
+    setLoadingStudents(true); setStudents([]);
     try {
       const data = await fetchData(`/core/admin/students/by-class/${cid}/`);
       setStudents(Array.isArray(data) ? data : []);
@@ -330,7 +405,6 @@ const ReportCardsInner = () => {
     else setReportCard(null);
   }, [studentId, term, fetchReportCard]);
 
-  /* ── Chart data ── */
   const chartData = useMemo(() =>
     (reportCard?.subjects ?? []).map((s) => ({
       subject: s.subject?.length > 8 ? s.subject.slice(0, 8) + "…" : s.subject,
@@ -341,7 +415,6 @@ const ReportCardsInner = () => {
     [reportCard]
   );
 
-  /* ── Print ── */
   const onPrint = () => window.print();
 
   const onExportPdf = async () => {
@@ -350,7 +423,6 @@ const ReportCardsInner = () => {
       const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
         import("html2canvas"), import("jspdf"),
       ]);
-      // Masquer les éléments no-print pendant le rendu
       const noPrint = document.querySelectorAll(".rc-no-print");
       noPrint.forEach((el) => (el.style.visibility = "hidden"));
       const canvas = await html2canvas(printableRef.current, { scale: 3, useCORS: true, logging: false });
@@ -370,9 +442,8 @@ const ReportCardsInner = () => {
     }
   };
 
-  /* ── Helpers ── */
   const reset = () => {
-    setClassId(""); setStudentId(""); setStudents([]); setReportCard(null);
+    setClassId(""); setStudentId(""); setStudents([]); setReportCard(null); setTermStatus(null);
   };
 
   const TERM_COLORS = {
@@ -381,15 +452,13 @@ const ReportCardsInner = () => {
     T3: { from:COL.from,  to:COL.to    },
   };
 
-  /* ══════════════════════════════════════
-     RENDER
-  ══════════════════════════════════════ */
+  /* ══ RENDER ══ */
   return (
     <div style={{ minHeight:"100vh", background:T.pageBg, transition:"background .3s",
       fontFamily:"'Plus Jakarta Sans', sans-serif", paddingBottom:60 }}>
       <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
-      {/* ═══ HEADER ═══ */}
+      {/* HEADER */}
       <header className="rc-no-print" style={{
         position:"sticky", top:0, zIndex:40,
         background:T.headerBg, backdropFilter:"blur(16px)",
@@ -421,15 +490,13 @@ const ReportCardsInner = () => {
 
       <main style={{ maxWidth:1280, margin:"0 auto", padding:"20px 24px 0" }}>
 
-        {/* ═══ SÉLECTEURS ═══ */}
+        {/* SÉLECTEURS */}
         <div className="rc-no-print" style={{
-          borderRadius:16, padding:"16px 20px", marginBottom:16,
+          borderRadius:16, padding:"16px 20px", marginBottom:12,
           background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
           boxShadow:T.cardShadow,
         }}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 180px auto", gap:12, alignItems:"end" }}>
-
-            {/* Classe */}
             <Sel label="Classe" icon={FaLayerGroup}
               value={classId} onChange={(e) => setClassId(e.target.value)}
               disabled={loadingClasses}>
@@ -439,7 +506,6 @@ const ReportCardsInner = () => {
               ))}
             </Sel>
 
-            {/* Élève */}
             <Sel label={`Élève${loadingStudents ? " …" : ""}`} icon={FaUserGraduate}
               value={studentId} onChange={(e) => setStudentId(e.target.value)}
               disabled={!classId || loadingStudents}>
@@ -456,12 +522,9 @@ const ReportCardsInner = () => {
               ))}
             </Sel>
 
-            {/* Trimestre — 3 boutons pill */}
             <div>
               <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
-                letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>
-                Trimestre
-              </p>
+                letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>Trimestre</p>
               <div style={{ display:"flex", gap:6 }}>
                 {Object.entries(TERM_COLORS).map(([t, { from, to }]) => {
                   const active = term === t;
@@ -475,15 +538,12 @@ const ReportCardsInner = () => {
                         border:`1.5px solid ${active ? "transparent" : T.inputBorder}`,
                         boxShadow: active ? `0 3px 10px ${from}55` : "none",
                         transform: active ? "translateY(-1px)" : "none",
-                      }}>
-                      {t}
-                    </button>
+                      }}>{t}</button>
                   );
                 })}
               </div>
             </div>
 
-            {/* Actions */}
             <div style={{ display:"flex", gap:8, flexDirection:"column" }}>
               <button
                 onClick={() => studentId ? fetchReportCard(studentId, term) : setMsg({ type:"error", text:"Choisissez d'abord un élève." })}
@@ -494,7 +554,7 @@ const ReportCardsInner = () => {
                   background:`linear-gradient(135deg,${COL.from},${COL.to})`,
                   boxShadow:`0 3px 10px ${COL.shadow}`,
                 }}>
-                <FaSyncAlt style={{ width:10,height:10 }} className={loadingReport?"animate-spin":""} />
+                <FaSyncAlt style={{ width:10,height:10, animation:loadingReport?"spin 1s linear infinite":undefined }} />
                 Recharger
               </button>
               <button onClick={reset}
@@ -506,14 +566,39 @@ const ReportCardsInner = () => {
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.background=T.rowHover)}
                 onMouseLeave={(e) => (e.currentTarget.style.background="transparent")}>
-                <FaTimes style={{ width:10,height:10 }} />
-                Vider
+                <FaTimes style={{ width:10,height:10 }} /> Vider
               </button>
             </div>
           </div>
         </div>
 
-        {/* ═══ ÉTAT VIDE / LOADING ═══ */}
+        {/* STATUS BANDEAU — sous les filtres */}
+        {classId && term && termStatus && (
+          <div className="rc-no-print" style={{
+            display:"flex", alignItems:"center", gap:10,
+            padding:"9px 16px", borderRadius:11, marginBottom:14,
+            background: STATUS_META[termStatus.status]?.bg || "#6366f118",
+            border:`1.5px solid ${STATUS_META[termStatus.status]?.color || "#6366f1"}33`,
+          }}>
+            {(() => {
+              const meta = STATUS_META[termStatus.status] || STATUS_META.draft;
+              const { Icon } = meta;
+              return (
+                <>
+                  <Icon style={{ width:12, height:12, color:meta.color, flexShrink:0 }} />
+                  <p style={{ fontSize:11, fontWeight:700, color:meta.color, flex:1 }}>
+                    Trimestre {term} · <strong>{meta.label}</strong>
+                    {termStatus.locked_by_name ? ` — ${termStatus.locked_by_name}` : ""}
+                    {termStatus.locked_at ? ` · ${new Date(termStatus.locked_at).toLocaleDateString("fr-FR")}` : ""}
+                    {termStatus.published_at ? ` · Publié le ${new Date(termStatus.published_at).toLocaleDateString("fr-FR")}` : ""}
+                  </p>
+                </>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* ÉTAT VIDE / LOADING */}
         {!studentId && !loadingReport && (
           <div style={{
             borderRadius:16, padding:"60px 24px", textAlign:"center",
@@ -527,9 +612,7 @@ const ReportCardsInner = () => {
             }}>
               <FaGraduationCap style={{ width:28,height:28,color:COL.from,opacity:.6 }} />
             </div>
-            <p style={{ fontSize:16, fontWeight:800, color:T.textSecondary }}>
-              Sélectionnez un élève
-            </p>
+            <p style={{ fontSize:16, fontWeight:800, color:T.textSecondary }}>Sélectionnez un élève</p>
             <p style={{ fontSize:12, color:T.textMuted, marginTop:6, maxWidth:300, margin:"6px auto 0", lineHeight:1.6 }}>
               Choisissez une classe, un élève et un trimestre pour afficher le bulletin scolaire.
             </p>
@@ -541,12 +624,13 @@ const ReportCardsInner = () => {
             borderRadius:16, padding:"60px 24px", textAlign:"center",
             background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
           }}>
-            <FaSyncAlt style={{ width:28,height:28,color:COL.from,margin:"0 auto 14px" }} className="animate-spin" />
+            <FaSyncAlt style={{ width:28,height:28,color:COL.from,margin:"0 auto 14px",
+              animation:"spin 1s linear infinite", display:"block" }} />
             <p style={{ fontSize:13, color:T.textMuted }}>Chargement du bulletin…</p>
           </div>
         )}
 
-        {/* ═══ BULLETIN ═══ */}
+        {/* BULLETIN */}
         {reportCard && !loadingReport && (() => {
           const avg = safeNum(reportCard.term_average);
           const mention = mentionFor(avg);
@@ -555,7 +639,7 @@ const ReportCardsInner = () => {
           return (
             <div style={{ animation:"fadeUp .3s ease-out" }}>
 
-              {/* Barre d'actions (no-print) */}
+              {/* Barre d'actions */}
               <div className="rc-no-print" style={{
                 display:"flex", alignItems:"center", justifyContent:"space-between",
                 gap:12, flexWrap:"wrap",
@@ -564,7 +648,6 @@ const ReportCardsInner = () => {
                 border:`1.5px solid ${T.cardBorder}`, boxShadow:T.cardShadow,
               }}>
                 <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                  {/* Avatar initiale */}
                   <div style={{
                     width:40, height:40, borderRadius:12, flexShrink:0,
                     display:"flex", alignItems:"center", justifyContent:"center",
@@ -583,6 +666,8 @@ const ReportCardsInner = () => {
                     </p>
                   </div>
                   <MentionBadge avg={avg} size="sm" />
+                  {/* Status badge in action bar */}
+                  <TermStatusBadge termStatus={termStatus} />
                 </div>
 
                 <div style={{ display:"flex", gap:8 }}>
@@ -620,19 +705,18 @@ const ReportCardsInner = () => {
                 </div>
               </div>
 
-              {/* ─── ZONE IMPRIMABLE ─── */}
+              {/* ZONE IMPRIMABLE */}
               <div ref={printableRef} style={{
                 background:T.cardBg, borderRadius:16, overflow:"hidden",
                 border:`1.5px solid ${T.cardBorder}`, boxShadow:T.cardShadow,
               }}>
-                {/* Bande de couleur trimestre */}
                 <div style={{ height:5, background:`linear-gradient(90deg,${tc.from},${tc.to})` }} />
 
                 {/* En-tête bulletin */}
                 <div style={{
-                  padding:"24px 28px",
-                  borderBottom:`1.5px solid ${T.divider}`,
-                  display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16, flexWrap:"wrap",
+                  padding:"24px 28px", borderBottom:`1.5px solid ${T.divider}`,
+                  display:"flex", alignItems:"flex-start", justifyContent:"space-between",
+                  gap:16, flexWrap:"wrap",
                 }}>
                   <div>
                     <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
@@ -649,28 +733,19 @@ const ReportCardsInner = () => {
                     </p>
                   </div>
 
-                  {/* Stats résumé */}
-                  <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
+                  <div style={{ display:"flex", gap:16, flexWrap:"wrap", alignItems:"flex-start" }}>
                     {[
                       {
                         label:"Moyenne générale",
                         val: avg !== null ? `${fmt(avg)}/20` : "—",
-                        color: avg !== null
-                          ? (avg >= 10 ? COL.from : "#ef4444")
-                          : T.textMuted,
+                        color: avg !== null ? (avg >= 10 ? COL.from : "#ef4444") : T.textMuted,
                         big: true,
                       },
-                      {
-                        label:"Mention",
-                        val: mention.label,
-                        color: mention.from,
-                        big: false,
-                      },
+                      { label:"Mention", val: mention.label, color: mention.from, big: false },
                       {
                         label:"Rang",
                         val: reportCard.rank != null ? `${reportCard.rank}e` : "—",
-                        color: T.textSecondary,
-                        big: false,
+                        color: T.textSecondary, big: false,
                       },
                     ].map(({ label, val, color, big }, i) => (
                       <div key={i} style={{
@@ -679,39 +754,43 @@ const ReportCardsInner = () => {
                         border:`1px solid ${T.cardBorder}`, minWidth:90,
                       }}>
                         <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
-                          letterSpacing:"0.07em", color:T.textMuted, marginBottom:4 }}>
-                          {label}
-                        </p>
-                        <p style={{ fontSize: big ? 22 : 14, fontWeight:900, color, lineHeight:1 }}>
-                          {val}
-                        </p>
+                          letterSpacing:"0.07em", color:T.textMuted, marginBottom:4 }}>{label}</p>
+                        <p style={{ fontSize: big ? 22 : 14, fontWeight:900, color, lineHeight:1 }}>{val}</p>
                       </div>
                     ))}
+                    {/* Status badge in bulletin header */}
+                    <div style={{ display:"flex", alignItems:"center" }}>
+                      <TermStatusBadge termStatus={termStatus} size="sm" />
+                    </div>
                   </div>
                 </div>
 
-                {/* Layout : tableau + aside */}
+                {/* Layout tableau + aside */}
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 280px" }}>
 
-                  {/* ── Tableau des matières ── */}
+                  {/* Tableau des matières */}
                   <div style={{ borderRight:`1px solid ${T.divider}`, overflowX:"auto" }}>
+                    {/* Notice statut — dans le corps du bulletin */}
+                    {termStatus && termStatus.status !== "published" && (
+                      <div style={{ padding:"12px 16px 0" }}>
+                        <TermStatusNotice termStatus={termStatus} />
+                      </div>
+                    )}
+
                     <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                       <thead>
-                        <tr style={{
-                          background:T.tableHead,
-                          borderBottom:`2px solid ${T.divider}`,
-                        }}>
+                        <tr style={{ background:T.tableHead, borderBottom:`2px solid ${T.divider}` }}>
                           {[
-                            { lbl:"Matière",     align:"left",   w:"auto"  },
-                            { lbl:"Coef",        align:"center", w:44      },
-                            { lbl:"I1",          align:"center", w:40      },
-                            { lbl:"I2",          align:"center", w:40      },
-                            { lbl:"I3",          align:"center", w:40      },
-                            { lbl:"D1",          align:"center", w:40      },
-                            { lbl:"D2",          align:"center", w:40      },
-                            { lbl:"Moy Interro", align:"center", w:80      },
-                            { lbl:"Moy Matière", align:"center", w:90      },
-                            { lbl:"Moy×Coef",    align:"center", w:80      },
+                            { lbl:"Matière",     align:"left",   w:"auto" },
+                            { lbl:"Coef",        align:"center", w:44     },
+                            { lbl:"I1",          align:"center", w:40     },
+                            { lbl:"I2",          align:"center", w:40     },
+                            { lbl:"I3",          align:"center", w:40     },
+                            { lbl:"D1",          align:"center", w:40     },
+                            { lbl:"D2",          align:"center", w:40     },
+                            { lbl:"Moy Interro", align:"center", w:80     },
+                            { lbl:"Moy Matière", align:"center", w:90     },
+                            { lbl:"Moy×Coef",    align:"center", w:80     },
                           ].map(({ lbl, align, w }, i) => (
                             <th key={i} style={{
                               padding:"9px 10px", textAlign:align,
@@ -722,15 +801,12 @@ const ReportCardsInner = () => {
                               background: lbl === "Moy Matière"
                                 ? (dark ? `${COL.from}18` : `${COL.from}0e`)
                                 : "transparent",
-                            }}>
-                              {lbl}
-                            </th>
+                            }}>{lbl}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {(reportCard.subjects ?? []).map((s, idx) => {
-                          const subAvg = safeNum(s.average_subject);
                           const even = idx % 2 === 0;
                           return (
                             <tr key={idx} style={{
@@ -741,46 +817,34 @@ const ReportCardsInner = () => {
                             }}
                             onMouseEnter={(e) => (e.currentTarget.style.background=dark?`${COL.from}12`:`${COL.from}07`)}
                             onMouseLeave={(e) => (e.currentTarget.style.background=even?T.cardBg:dark?"rgba(255,255,255,0.018)":"rgba(0,0,0,0.012)")}>
-
-                              {/* Matière */}
-                              <td style={{ padding:"9px 10px", fontWeight:700, color:T.textPrimary }}>
-                                {s.subject}
-                              </td>
-                              {/* Coef */}
+                              <td style={{ padding:"9px 10px", fontWeight:700, color:T.textPrimary }}>{s.subject}</td>
                               <td style={{ padding:"9px 10px", textAlign:"center", color:T.textMuted, fontWeight:600 }}>
                                 {s.coefficient ?? 1}
                               </td>
-                              {/* Notes individuelles */}
                               {[s.interrogation1, s.interrogation2, s.interrogation3, s.devoir1, s.devoir2].map((v, i) => (
                                 <td key={i} style={{ padding:"9px 10px", textAlign:"center" }}>
                                   <span style={{
-                                    fontSize:11, color: safeNum(v) !== null && safeNum(v) < 10
-                                      ? "#ef4444" : T.textSecondary,
+                                    fontSize:11,
+                                    color: safeNum(v) !== null && safeNum(v) < 10 ? "#ef4444" : T.textSecondary,
                                     fontWeight: safeNum(v) !== null && safeNum(v) < 10 ? 700 : 500,
-                                  }}>
-                                    {fmt(v)}
-                                  </span>
+                                  }}>{fmt(v)}</span>
                                 </td>
                               ))}
-                              {/* Moy Interro */}
                               <td style={{ padding:"9px 10px", textAlign:"center" }}>
                                 <AvgCell value={s.average_interro} />
                               </td>
-                              {/* Moy Matière (highlightée) */}
                               <td style={{
                                 padding:"9px 10px", textAlign:"center",
                                 background: dark ? `${COL.from}12` : `${COL.from}07`,
                               }}>
                                 <AvgCell value={s.average_subject} bold highlight />
                               </td>
-                              {/* Moy×Coef */}
                               <td style={{ padding:"9px 10px", textAlign:"center" }}>
                                 <AvgCell value={s.average_coeff} bold />
                               </td>
                             </tr>
                           );
                         })}
-
                         {(!reportCard.subjects || reportCard.subjects.length === 0) && (
                           <tr>
                             <td colSpan={10} style={{ padding:"32px 16px", textAlign:"center",
@@ -793,18 +857,14 @@ const ReportCardsInner = () => {
                     </table>
                   </div>
 
-                  {/* ── Colonne latérale : stats + graphique ── */}
+                  {/* Colonne latérale */}
                   <div className="rc-no-print" style={{ display:"flex", flexDirection:"column" }}>
-
-                    {/* Stats */}
                     <div style={{ padding:"20px 18px", borderBottom:`1px solid ${T.divider}` }}>
                       <p style={{ fontSize:11, fontWeight:800, textTransform:"uppercase",
-                        letterSpacing:"0.07em", color:T.textMuted, marginBottom:12 }}>
-                        Statistiques
-                      </p>
+                        letterSpacing:"0.07em", color:T.textMuted, marginBottom:12 }}>Statistiques</p>
                       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                         {[
-                          { label:"Meilleure moyenne",    val: reportCard.best_average,  color:"#10b981" },
+                          { label:"Meilleure moyenne",     val: reportCard.best_average,  color:"#10b981" },
                           { label:"Moyenne la plus basse", val: reportCard.worst_average, color:"#ef4444" },
                           { label:"Moyenne pondérée",      val: reportCard.term_average,  color:COL.from  },
                         ].map(({ label, val, color }, i) => {
@@ -829,14 +889,12 @@ const ReportCardsInner = () => {
                           );
                         })}
                       </div>
-
-                      {/* Mention grande */}
-                      <div style={{ marginTop:14 }}>
+                      <div style={{ marginTop:14, display:"flex", flexDirection:"column", gap:8 }}>
                         <MentionBadge avg={avg} size="lg" />
+                        <TermStatusBadge termStatus={termStatus} size="sm" />
                       </div>
                     </div>
 
-                    {/* Graphique */}
                     {chartData.length > 0 && (
                       <div style={{ padding:"16px 18px", flex:1 }}>
                         <p style={{ fontSize:11, fontWeight:800, textTransform:"uppercase",
@@ -847,23 +905,13 @@ const ReportCardsInner = () => {
                           <BarChart data={chartData} margin={{ top:4, right:4, left:-24, bottom:50 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={T.divider} />
                             <ReferenceLine y={10} stroke="#ef444466" strokeDasharray="4 2" />
-                            <XAxis
-                              dataKey="subject"
-                              interval={0}
-                              angle={-40}
-                              textAnchor="end"
-                              height={60}
-                              tick={{ fontSize:8, fill:T.textMuted, fontWeight:600 }}
-                            />
-                            <YAxis
-                              domain={[0, 20]}
-                              ticks={[0, 5, 10, 15, 20]}
-                              tick={{ fontSize:9, fill:T.textMuted }}
-                            />
+                            <XAxis dataKey="subject" interval={0} angle={-40} textAnchor="end"
+                              height={60} tick={{ fontSize:8, fill:T.textMuted, fontWeight:600 }} />
+                            <YAxis domain={[0, 20]} ticks={[0, 5, 10, 15, 20]}
+                              tick={{ fontSize:9, fill:T.textMuted }} />
                             <Tooltip content={<CustomTooltip />} />
                             <Bar dataKey="average" name="Moy. matière"
-                              radius={[4, 4, 0, 0]}
-                              fill={`url(#barGrad)`} />
+                              radius={[4, 4, 0, 0]} fill={`url(#barGrad)`} />
                             <defs>
                               <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
                                 <stop offset="0%" stopColor={COL.from} />
@@ -877,10 +925,9 @@ const ReportCardsInner = () => {
                   </div>
                 </div>
 
-                {/* Pied de page bulletin */}
+                {/* Pied de page */}
                 <div style={{
-                  padding:"14px 28px",
-                  borderTop:`1px solid ${T.divider}`,
+                  padding:"14px 28px", borderTop:`1px solid ${T.divider}`,
                   display:"flex", alignItems:"center", justifyContent:"space-between",
                   flexWrap:"wrap", gap:8,
                 }}>
@@ -900,9 +947,7 @@ const ReportCardsInner = () => {
       <Toast msg={msg} onClose={() => setMsg(null)} />
 
       <style>{BASE_KEYFRAMES}{`
-        .animate-spin  { animation: spin 1s linear infinite; }
         @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
-
         @media print {
           @page { size: A4 portrait; margin: 8mm; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -915,7 +960,7 @@ const ReportCardsInner = () => {
   );
 };
 
-/* ── Root ── */
+/* ROOT */
 const ReportCardsUnified = () => {
   const [dark, setDark] = useState(() => {
     try { return localStorage.getItem("scol360_dark") === "true"; } catch { return false; }

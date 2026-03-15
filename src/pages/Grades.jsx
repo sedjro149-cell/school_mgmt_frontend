@@ -1,14 +1,4 @@
 // src/pages/Grades.jsx
-// ─────────────────────────────────────────────────────────────────────────────
-//  GESTION DES NOTES — Formulaire + Cartes
-//  Bugs corrigés :
-//    • BUG CRASH #1 : "@media(...)" dans style={{}} → crash moteur CSS Blink
-//      → Supprimé. Responsive géré en JS via ResizeObserver
-//    • BUG #2 : type="number" dans GradeInput → molette modifie les notes
-//      → type="text" + inputMode="decimal" + onWheel blur
-//    • BUG #3 : window.confirm dans handleDelete → remplacé par ConfirmDialog
-//    • BUG #4 : className="animate-spin/pulse" → inline keyframes
-// ─────────────────────────────────────────────────────────────────────────────
 import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from "react";
@@ -18,6 +8,7 @@ import {
   FaSave, FaEraser, FaCheck, FaSyncAlt,
   FaExclamationTriangle, FaMoon, FaSun,
   FaTimes, FaPlus, FaExclamationCircle,
+  FaLock, FaLockOpen, FaEye,
 } from "react-icons/fa";
 import { fetchData, postData, putData, deleteData } from "./api";
 import {
@@ -25,18 +16,15 @@ import {
   SECTION_PALETTE, avatarGradient, BASE_KEYFRAMES,
 } from "./theme";
 
-const COL = SECTION_PALETTE.finance; // emerald → teal
+const COL = SECTION_PALETTE.finance;
 
-/* ──────────────────────────────────────────────────────────────
-   UTILS
-────────────────────────────────────────────────────────────── */
+/* ── UTILS ── */
 function buildQuery(obj = {}) {
   const parts = Object.entries(obj)
     .filter(([, v]) => v !== null && v !== undefined && v !== "")
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
   return parts.length ? `?${parts.join("&")}` : "";
 }
-
 const studentLabel = (s) => {
   if (!s) return "—";
   if (s.user?.first_name || s.user?.last_name)
@@ -56,10 +44,13 @@ const TERM_COLORS = {
   T2:{ from:"#10b981", to:"#14b8a6" },
   T3:{ from:"#f59e0b", to:"#f97316" },
 };
+const STATUS_META = {
+  draft:     { label:"Brouillon",  color:"#6366f1", bg:"#6366f118", Icon: FaLockOpen },
+  locked:    { label:"Verrouillé", color:"#f59e0b", bg:"#f59e0b18", Icon: FaLock     },
+  published: { label:"Publié",     color:"#10b981", bg:"#10b98118", Icon: FaEye      },
+};
 
-/* ──────────────────────────────────────────────────────────────
-   ATOMES
-────────────────────────────────────────────────────────────── */
+/* ── DARK TOGGLE ── */
 const DarkToggle = () => {
   const { dark, toggle } = useTheme();
   const [hov, setHov] = useState(false);
@@ -85,6 +76,7 @@ const DarkToggle = () => {
   );
 };
 
+/* ── TOAST ── */
 const Toast = ({ msg, onClose }) => {
   useEffect(() => {
     if (msg) { const t = setTimeout(onClose, 4500); return () => clearTimeout(t); }
@@ -108,9 +100,7 @@ const Toast = ({ msg, onClose }) => {
   );
 };
 
-/* ──────────────────────────────────────────────────────────────
-   CONFIRM DIALOG — BUG FIX #3 (remplace window.confirm)
-────────────────────────────────────────────────────────────── */
+/* ── CONFIRM DIALOG ── */
 const ConfirmDialog = ({ open, title, message, onConfirm, onCancel }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
@@ -138,8 +128,7 @@ const ConfirmDialog = ({ open, title, message, onConfirm, onCancel }) => {
           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
             <div style={{
               width:34, height:34, borderRadius:10, flexShrink:0,
-              display:"flex", alignItems:"center", justifyContent:"center",
-              background:"#ef444418",
+              display:"flex", alignItems:"center", justifyContent:"center", background:"#ef444418",
             }}>
               <FaExclamationCircle style={{ width:15,height:15,color:"#ef4444" }} />
             </div>
@@ -157,27 +146,48 @@ const ConfirmDialog = ({ open, title, message, onConfirm, onCancel }) => {
             padding:"8px 16px", borderRadius:9, border:`1.5px solid ${T.cardBorder}`,
             background:"transparent", cursor:"pointer", fontSize:12, fontWeight:700,
             color:T.textSecondary, fontFamily:"'Plus Jakarta Sans', sans-serif",
-          }}>
-            Annuler
-          </button>
+          }}>Annuler</button>
           <button onClick={onConfirm} style={{
             padding:"8px 18px", borderRadius:9, border:"none", cursor:"pointer",
             fontSize:12, fontWeight:800, color:"#fff",
             background:"linear-gradient(135deg,#ef4444,#dc2626)",
             boxShadow:"0 4px 12px #ef444444",
             fontFamily:"'Plus Jakarta Sans', sans-serif",
-          }}>
-            Supprimer
-          </button>
+          }}>Supprimer</button>
         </div>
       </div>
     </div>
   );
 };
 
-/* ──────────────────────────────────────────────────────────────
-   Styled select
-────────────────────────────────────────────────────────────── */
+/* ── LOCK BANNER ── */
+const LockBanner = ({ termStatus }) => {
+  const { dark } = useTheme();
+  if (!termStatus || termStatus.status === "draft") return null;
+  const meta = STATUS_META[termStatus.status] || STATUS_META.locked;
+  const { Icon } = meta;
+  return (
+    <div style={{
+      display:"flex", alignItems:"center", gap:10,
+      padding:"11px 16px", borderRadius:11, marginBottom:14,
+      background: meta.bg, border:`1.5px solid ${meta.color}33`,
+    }}>
+      <Icon style={{ width:15, height:15, color:meta.color, flexShrink:0 }} />
+      <div style={{ flex:1 }}>
+        <p style={{ fontSize:12, fontWeight:800, color:meta.color }}>
+          Trimestre {meta.label.toLowerCase()} — ajouts et modifications désactivés
+        </p>
+        <p style={{ fontSize:10, color:meta.color, opacity:0.8, marginTop:2 }}>
+          {termStatus.locked_by_name ? `Verrouillé par ${termStatus.locked_by_name}` : ""}
+          {termStatus.locked_at ? ` · ${new Date(termStatus.locked_at).toLocaleDateString("fr-FR")}` : ""}
+          {" · "}Pour modifier, déverrouillez dans <strong>Gestion Trimestres</strong>.
+        </p>
+      </div>
+    </div>
+  );
+};
+
+/* ── STYLED SELECT ── */
 const Sel = ({ icon: Icon, children, value, onChange, disabled }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
@@ -213,9 +223,7 @@ const Sel = ({ icon: Icon, children, value, onChange, disabled }) => {
   );
 };
 
-/* ──────────────────────────────────────────────────────────────
-   GRADE INPUT — BUG FIX #2 : type="text" + onWheel blur
-────────────────────────────────────────────────────────────── */
+/* ── GRADE INPUT ── */
 const GradeInput = ({ label, accent, value, onChange }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
@@ -227,15 +235,10 @@ const GradeInput = ({ label, accent, value, onChange }) => {
       <p style={{
         fontSize:9, fontWeight:800, textTransform:"uppercase",
         letterSpacing:"0.08em", color: accent || T.textMuted, marginBottom:4,
-      }}>
-        {label}
-      </p>
+      }}>{label}</p>
       <input
-        type="text"
-        inputMode="decimal"
-        pattern="[0-9.]*"
-        value={value ?? ""}
-        placeholder="—"
+        type="text" inputMode="decimal" pattern="[0-9.]*"
+        value={value ?? ""} placeholder="—"
         onChange={onChange}
         onWheel={(e) => e.currentTarget.blur()}
         onFocus={(e) => { setFocused(true); e.currentTarget.select(); }}
@@ -254,30 +257,21 @@ const GradeInput = ({ label, accent, value, onChange }) => {
   );
 };
 
-/* ──────────────────────────────────────────────────────────────
-   GRADE BADGE
-────────────────────────────────────────────────────────────── */
+/* ── GRADE BADGE ── */
 const GradeBadge = ({ label, value, accent }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
   const num = parseFloat(value);
   const hasVal = !isNaN(num) && value !== "" && value !== null && value !== undefined;
   let bg, color, border;
-  if (!hasVal) {
-    bg = T.inputBg; color = T.textMuted; border = T.divider;
-  } else if (num < 10) {
-    bg = dark?"rgba(239,68,68,0.12)":"#fef2f2"; color="#ef4444"; border="#fecaca";
-  } else if (num >= 16) {
-    bg = dark?"rgba(16,185,129,0.12)":"#ecfdf5"; color=COL.from; border=`${COL.from}55`;
-  } else {
-    bg = T.cardBg; color = T.textPrimary; border = T.cardBorder;
-  }
+  if (!hasVal) { bg = T.inputBg; color = T.textMuted; border = T.divider; }
+  else if (num < 10) { bg = dark?"rgba(239,68,68,0.12)":"#fef2f2"; color="#ef4444"; border="#fecaca"; }
+  else if (num >= 16) { bg = dark?"rgba(16,185,129,0.12)":"#ecfdf5"; color=COL.from; border=`${COL.from}55`; }
+  else { bg = T.cardBg; color = T.textPrimary; border = T.cardBorder; }
   return (
     <div style={{ textAlign:"center" }}>
       <p style={{ fontSize:8, fontWeight:800, textTransform:"uppercase",
-        letterSpacing:"0.07em", color: accent || T.textMuted, marginBottom:3 }}>
-        {label}
-      </p>
+        letterSpacing:"0.07em", color: accent || T.textMuted, marginBottom:3 }}>{label}</p>
       <div style={{
         width:38, height:34, display:"flex", alignItems:"center", justifyContent:"center",
         borderRadius:8, background:bg, border:`1.5px solid ${border}`,
@@ -289,10 +283,8 @@ const GradeBadge = ({ label, value, accent }) => {
   );
 };
 
-/* ──────────────────────────────────────────────────────────────
-   GRADE CARD
-────────────────────────────────────────────────────────────── */
-const GradeCard = ({ grade, onEdit, onDelete, animDelay }) => {
+/* ── GRADE CARD ── */
+const GradeCard = ({ grade, onEdit, onDelete, animDelay, isLocked }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
   const [hov, setHov] = useState(false);
@@ -339,13 +331,14 @@ const GradeCard = ({ grade, onEdit, onDelete, animDelay }) => {
             {grade.subject_name}
           </p>
         </div>
-        <span style={{
-          flexShrink:0, padding:"2px 8px", borderRadius:999, fontSize:10, fontWeight:800,
-          background:`linear-gradient(135deg,${termColor.from}22,${termColor.to}11)`,
-          color:termColor.from, border:`1px solid ${termColor.from}44`,
-        }}>
-          {grade.term}
-        </span>
+        <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+          {isLocked && <FaLock style={{ width:9,height:9,color:"#f59e0b" }} />}
+          <span style={{
+            flexShrink:0, padding:"2px 8px", borderRadius:999, fontSize:10, fontWeight:800,
+            background:`linear-gradient(135deg,${termColor.from}22,${termColor.to}11)`,
+            color:termColor.from, border:`1px solid ${termColor.from}44`,
+          }}>{grade.term}</span>
+        </div>
       </div>
 
       <div style={{
@@ -370,9 +363,7 @@ const GradeCard = ({ grade, onEdit, onDelete, animDelay }) => {
       <div style={{ padding:"10px 14px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
         <div>
           <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
-            letterSpacing:"0.07em", color:T.textMuted, marginBottom:2 }}>
-            Moyenne
-          </p>
+            letterSpacing:"0.07em", color:T.textMuted, marginBottom:2 }}>Moyenne</p>
           <div style={{ display:"flex", alignItems:"baseline", gap:4 }}>
             <span style={{
               fontSize:22, fontWeight:900, lineHeight:1,
@@ -404,25 +395,35 @@ const GradeCard = ({ grade, onEdit, onDelete, animDelay }) => {
           </div>
         )}
 
-        <div style={{ display:"flex", gap:4, opacity: hov ? 1 : 0.3, transition:"opacity .15s" }}>
-          <button onClick={() => onEdit(grade)}
+        <div style={{
+          display:"flex", gap:4,
+          opacity: isLocked ? 0.25 : (hov ? 1 : 0.3),
+          transition:"opacity .15s",
+        }}>
+          <button
+            onClick={() => onEdit(grade)}
+            disabled={isLocked}
             style={{
-              width:30, height:30, borderRadius:8, border:"none", cursor:"pointer",
+              width:30, height:30, borderRadius:8, border:"none",
+              cursor: isLocked ? "not-allowed" : "pointer",
               display:"flex", alignItems:"center", justifyContent:"center",
               background: dark?"#2a1a06":"#fffbeb", color:"#f59e0b", transition:"background .12s",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.background="#f59e0b22")}
-            onMouseLeave={(e) => (e.currentTarget.style.background=dark?"#2a1a06":"#fffbeb")}>
+            onMouseEnter={(e) => !isLocked && (e.currentTarget.style.background="#f59e0b22")}
+            onMouseLeave={(e) => !isLocked && (e.currentTarget.style.background=dark?"#2a1a06":"#fffbeb")}>
             <FaEdit style={{ width:11,height:11 }} />
           </button>
-          <button onClick={() => onDelete(grade.id)}
+          <button
+            onClick={() => onDelete(grade.id)}
+            disabled={isLocked}
             style={{
-              width:30, height:30, borderRadius:8, border:"none", cursor:"pointer",
+              width:30, height:30, borderRadius:8, border:"none",
+              cursor: isLocked ? "not-allowed" : "pointer",
               display:"flex", alignItems:"center", justifyContent:"center",
               background: dark?"#2a0a0a":"#fef2f2", color:"#ef4444", transition:"background .12s",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.background="#ef444422")}
-            onMouseLeave={(e) => (e.currentTarget.style.background=dark?"#2a0a0a":"#fef2f2")}>
+            onMouseEnter={(e) => !isLocked && (e.currentTarget.style.background="#ef444422")}
+            onMouseLeave={(e) => !isLocked && (e.currentTarget.style.background=dark?"#2a0a0a":"#fef2f2")}>
             <FaTrash style={{ width:11,height:11 }} />
           </button>
         </div>
@@ -431,14 +432,11 @@ const GradeCard = ({ grade, onEdit, onDelete, animDelay }) => {
   );
 };
 
-/* ──────────────────────────────────────────────────────────────
-   PAGE PRINCIPALE
-────────────────────────────────────────────────────────────── */
+/* ── PAGE PRINCIPALE ── */
 const GradesInner = () => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
 
-  /* ── BUG FIX #1 : responsive via ResizeObserver (plus de @media dans style) ── */
   const containerRef = useRef(null);
   const [containerW, setContainerW] = useState(1200);
   useEffect(() => {
@@ -449,7 +447,6 @@ const GradesInner = () => {
   }, []);
   const isNarrow = containerW < 860;
 
-  /* ── State ── */
   const [classes,         setClasses]         = useState([]);
   const [subjects,        setSubjects]        = useState([]);
   const [students,        setStudents]        = useState([]);
@@ -459,12 +456,32 @@ const GradesInner = () => {
   const [loadingGrades,   setLoadingGrades]   = useState(false);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [loadingRefs,     setLoadingRefs]     = useState(true);
+  const [termStatus,      setTermStatus]      = useState(null);
+
   const EMPTY_FORM = { id:null, student_id:"", subject_id:"", term:"T1",
     interrogation1:"", interrogation2:"", interrogation3:"", devoir1:"", devoir2:"" };
   const [form,    setForm]    = useState(EMPTY_FORM);
   const [saving,  setSaving]  = useState(false);
   const [msg,     setMsg]     = useState(null);
   const [confirm, setConfirm] = useState({ open:false, id:null });
+
+  const isLocked = termStatus?.status === "locked" || termStatus?.status === "published";
+  const hasClassAndTerm = !!filters.school_class && !!filters.term;
+  const statusMeta = termStatus ? (STATUS_META[termStatus.status] || STATUS_META.draft) : null;
+
+  /* ── fetchTermStatus ── */
+  const fetchTermStatus = useCallback(async (cls, term) => {
+    if (!cls || !term) { setTermStatus(null); return; }
+    try {
+      const data = await fetchData(`/academics/term-status/?school_class=${cls}&term=${term}`);
+      const list = Array.isArray(data) ? data : (data?.results ?? []);
+      setTermStatus(list.length ? list[0] : null);
+    } catch { setTermStatus(null); }
+  }, []);
+
+  useEffect(() => {
+    fetchTermStatus(filters.school_class, filters.term);
+  }, [filters.school_class, filters.term, fetchTermStatus]);
 
   /* ── Chargement classes + matières ── */
   useEffect(() => {
@@ -482,10 +499,7 @@ const GradesInner = () => {
     })();
   }, []);
 
-  /* ── Élèves selon classe ──
-     BUG FIX : setFilters n'appelle setFilters que si student n'est pas déjà ""
-     → évite de créer un nouvel objet filters inutilement
-  ── */
+  /* ── Élèves selon classe ── */
   useEffect(() => {
     const cls = filters.school_class;
     setStudents([]);
@@ -514,9 +528,15 @@ const GradesInner = () => {
       });
       const data = await fetchData(`/academics/grades/${q}`);
       setGrades(Array.isArray(data) ? data : (data?.results ?? []));
-    } catch { setMsg({ type:"error", text:"Erreur lors de la récupération des notes." }); }
-    finally  { setLoadingGrades(false); }
-  }, [filters, search]);
+    } catch (err) {
+      if (err?.status === 423) {
+        fetchTermStatus(filters.school_class, filters.term);
+        setMsg({ type:"error", text:"Ce trimestre est verrouillé." });
+      } else {
+        setMsg({ type:"error", text:"Erreur lors de la récupération des notes." });
+      }
+    } finally { setLoadingGrades(false); }
+  }, [filters, search, fetchTermStatus]);
 
   useEffect(() => { fetchGrades(); }, []); // eslint-disable-line
 
@@ -526,6 +546,10 @@ const GradesInner = () => {
 
   /* ── Submit ── */
   const handleSubmit = async () => {
+    if (isLocked) {
+      setMsg({ type:"error", text:"Ce trimestre est verrouillé — modifications impossibles." });
+      return;
+    }
     if (!form.student_id || !form.subject_id) {
       setMsg({ type:"error", text:"Veuillez sélectionner un élève et une matière." });
       return;
@@ -545,13 +569,22 @@ const GradesInner = () => {
       setForm(EMPTY_FORM);
       await fetchGrades();
     } catch (err) {
-      const detail = err?.response?.data?.detail;
-      setMsg({ type:"error", text: detail || "Erreur lors de l'enregistrement." });
+      if (err?.status === 423) {
+        fetchTermStatus(filters.school_class, filters.term);
+        setMsg({ type:"error", text:"Ce trimestre est verrouillé — opération refusée." });
+      } else {
+        const detail = err?.response?.data?.detail;
+        setMsg({ type:"error", text: detail || "Erreur lors de l'enregistrement." });
+      }
     } finally { setSaving(false); }
   };
 
   /* ── Edit ── */
   const handleEdit = (g) => {
+    if (isLocked) {
+      setMsg({ type:"error", text:"Ce trimestre est verrouillé — modification impossible." });
+      return;
+    }
     setForm({
       id:g.id, student_id:g.student_id, subject_id:g.subject_id, term:g.term||"T1",
       interrogation1:g.interrogation1??"", interrogation2:g.interrogation2??"",
@@ -562,8 +595,14 @@ const GradesInner = () => {
     window.scrollTo({ top:0, behavior:"smooth" });
   };
 
-  /* ── Delete — BUG FIX #3 ── */
-  const handleDeleteRequest = (id) => setConfirm({ open:true, id });
+  /* ── Delete ── */
+  const handleDeleteRequest = (id) => {
+    if (isLocked) {
+      setMsg({ type:"error", text:"Ce trimestre est verrouillé — suppression impossible." });
+      return;
+    }
+    setConfirm({ open:true, id });
+  };
   const handleDeleteConfirm = async () => {
     const id = confirm.id;
     setConfirm({ open:false, id:null });
@@ -571,7 +610,14 @@ const GradesInner = () => {
       await deleteData(`/academics/grades/${id}/`);
       setMsg({ type:"success", text:"Note supprimée." });
       await fetchGrades();
-    } catch { setMsg({ type:"error", text:"Impossible de supprimer cette note." }); }
+    } catch (err) {
+      if (err?.status === 423) {
+        fetchTermStatus(filters.school_class, filters.term);
+        setMsg({ type:"error", text:"Ce trimestre est verrouillé." });
+      } else {
+        setMsg({ type:"error", text:"Impossible de supprimer cette note." });
+      }
+    }
   };
 
   const setF = (k, v) => setFilters((p) => ({ ...p, [k]: v }));
@@ -617,9 +663,22 @@ const GradesInner = () => {
               <h1 style={{ fontSize:17, fontWeight:900, color:T.textPrimary, letterSpacing:"-0.02em" }}>
                 Gestion des Notes
               </h1>
-              <p style={{ fontSize:11, color:T.textMuted, marginTop:1 }}>
-                Saisie, consultation et suivi des évaluations par trimestre
-              </p>
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:2 }}>
+                <p style={{ fontSize:11, color:T.textMuted }}>
+                  Saisie, consultation et suivi des évaluations par trimestre
+                </p>
+                {hasClassAndTerm && statusMeta && (
+                  <span style={{
+                    display:"inline-flex", alignItems:"center", gap:4,
+                    padding:"1px 8px", borderRadius:999, fontSize:9, fontWeight:800,
+                    background: statusMeta.bg, color:statusMeta.color,
+                    textTransform:"uppercase", letterSpacing:"0.06em",
+                  }}>
+                    <statusMeta.Icon style={{ width:8,height:8 }} />
+                    {statusMeta.label}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
           <DarkToggle />
@@ -628,7 +687,10 @@ const GradesInner = () => {
 
       <main ref={containerRef} style={{ maxWidth:1200, margin:"0 auto", padding:"20px 24px 0" }}>
 
-        {/* FILTRES — BUG FIX #1 : plus de @media dans style={{}} */}
+        {/* Lock Banner */}
+        {hasClassAndTerm && <LockBanner termStatus={termStatus} />}
+
+        {/* FILTRES */}
         <div style={{
           borderRadius:16, padding:"14px 18px", marginBottom:16,
           background:T.cardBg, border:`1.5px solid ${T.cardBorder}`, boxShadow:T.cardShadow,
@@ -663,7 +725,6 @@ const GradesInner = () => {
                 />
               </div>
             </div>
-            {/* Classe */}
             <div>
               <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
                 letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>Classe</p>
@@ -673,7 +734,6 @@ const GradesInner = () => {
                 {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </Sel>
             </div>
-            {/* Élève */}
             <div>
               <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
                 letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>
@@ -692,7 +752,6 @@ const GradesInner = () => {
                 {students.map((s) => <option key={s.id} value={s.id}>{studentLabel(s)}</option>)}
               </Sel>
             </div>
-            {/* Matière */}
             <div>
               <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
                 letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>Matière</p>
@@ -702,7 +761,6 @@ const GradesInner = () => {
                 {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </Sel>
             </div>
-            {/* Trimestre */}
             <div>
               <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
                 letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>Trimestre</p>
@@ -711,7 +769,6 @@ const GradesInner = () => {
                 {TERMS.map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}
               </Sel>
             </div>
-            {/* Bouton */}
             <button onClick={() => fetchGrades()} style={{
               display:"flex", alignItems:"center", justifyContent:"center", gap:7,
               padding:"9px 14px", borderRadius:10, border:"none", cursor:"pointer",
@@ -748,7 +805,7 @@ const GradesInner = () => {
           </div>
         )}
 
-        {/* LAYOUT FORM + RÉSULTATS — BUG FIX #1 */}
+        {/* LAYOUT FORM + RÉSULTATS */}
         <div style={{
           display:"grid",
           gridTemplateColumns: isNarrow ? "1fr" : "300px 1fr",
@@ -759,40 +816,47 @@ const GradesInner = () => {
             borderRadius:16, overflow:"hidden",
             position: isNarrow ? "relative" : "sticky", top:76,
             background:T.cardBg,
-            border:`1.5px solid ${isEditing ? "#f59e0b88" : T.cardBorder}`,
-            boxShadow: isEditing ? "0 4px 20px #f59e0b22" : T.cardShadow,
+            border:`1.5px solid ${isLocked ? "#f59e0b55" : isEditing ? "#f59e0b88" : T.cardBorder}`,
+            boxShadow: isLocked ? "0 4px 20px #f59e0b18" : isEditing ? "0 4px 20px #f59e0b22" : T.cardShadow,
             transition:"border-color .3s, box-shadow .3s",
           }}>
             <div style={{
               height:4, transition:"background .3s",
-              background: isEditing
+              background: isLocked
                 ? "linear-gradient(90deg,#f59e0b,#f97316)"
-                : `linear-gradient(90deg,${COL.from},${COL.to})`,
+                : isEditing
+                  ? "linear-gradient(90deg,#f59e0b,#f97316)"
+                  : `linear-gradient(90deg,${COL.from},${COL.to})`,
             }} />
 
             <div style={{
               padding:"12px 16px", borderBottom:`1px solid ${T.divider}`,
               display:"flex", alignItems:"center", justifyContent:"space-between",
-              background: isEditing ? (dark?"rgba(245,158,11,0.08)":"#fffbeb") : "transparent",
+              background: isLocked
+                ? (dark?"rgba(245,158,11,0.06)":"#fffbf0")
+                : isEditing ? (dark?"rgba(245,158,11,0.08)":"#fffbeb") : "transparent",
               transition:"background .3s",
             }}>
               <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                 <div style={{
                   width:30, height:30, borderRadius:8, flexShrink:0,
                   display:"flex", alignItems:"center", justifyContent:"center",
-                  background: isEditing
+                  background: isLocked
                     ? "linear-gradient(135deg,#f59e0b,#f97316)"
-                    : `linear-gradient(135deg,${COL.from},${COL.to})`,
-                  boxShadow: isEditing ? "0 3px 8px #f59e0b44" : `0 3px 8px ${COL.shadow}`,
+                    : isEditing
+                      ? "linear-gradient(135deg,#f59e0b,#f97316)"
+                      : `linear-gradient(135deg,${COL.from},${COL.to})`,
+                  boxShadow: (isLocked || isEditing) ? "0 3px 8px #f59e0b44" : `0 3px 8px ${COL.shadow}`,
                 }}>
-                  {isEditing ? <FaEdit style={{ width:12,height:12,color:"#fff" }} />
-                             : <FaPlus style={{ width:12,height:12,color:"#fff" }} />}
+                  {isLocked ? <FaLock style={{ width:12,height:12,color:"#fff" }} />
+                    : isEditing ? <FaEdit style={{ width:12,height:12,color:"#fff" }} />
+                    : <FaPlus style={{ width:12,height:12,color:"#fff" }} />}
                 </div>
                 <p style={{ fontSize:13, fontWeight:800, color:T.textPrimary }}>
-                  {isEditing ? "Modifier la note" : "Nouvelle saisie"}
+                  {isLocked ? "Trimestre verrouillé" : isEditing ? "Modifier la note" : "Nouvelle saisie"}
                 </p>
               </div>
-              {isEditing && (
+              {isEditing && !isLocked && (
                 <button onClick={() => setForm(EMPTY_FORM)} style={{
                   display:"flex", alignItems:"center", gap:5, padding:"4px 9px", borderRadius:7,
                   border:`1px solid #f59e0b44`, background:"transparent",
@@ -803,8 +867,12 @@ const GradesInner = () => {
               )}
             </div>
 
-            <div style={{ padding:"14px 16px", display:"flex", flexDirection:"column", gap:12 }}>
-              {/* Classe */}
+            <div style={{
+              padding:"14px 16px", display:"flex", flexDirection:"column", gap:12,
+              opacity: isLocked ? 0.6 : 1,
+              pointerEvents: isLocked ? "none" : "auto",
+              transition:"opacity .3s",
+            }}>
               <div>
                 <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
                   letterSpacing:"0.07em", color:T.textMuted, marginBottom:4 }}>
@@ -816,7 +884,6 @@ const GradesInner = () => {
                   {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Sel>
               </div>
-              {/* Élève */}
               <div>
                 <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
                   letterSpacing:"0.07em", color:T.textMuted, marginBottom:4 }}>Élève *</p>
@@ -832,7 +899,6 @@ const GradesInner = () => {
                   {students.map((s) => <option key={s.id} value={s.id}>{studentLabel(s)}</option>)}
                 </Sel>
               </div>
-              {/* Matière */}
               <div>
                 <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
                   letterSpacing:"0.07em", color:T.textMuted, marginBottom:4 }}>Matière *</p>
@@ -842,7 +908,6 @@ const GradesInner = () => {
                   {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </Sel>
               </div>
-              {/* Trimestre */}
               <div>
                 <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
                   letterSpacing:"0.07em", color:T.textMuted, marginBottom:6 }}>Trimestre</p>
@@ -859,9 +924,7 @@ const GradesInner = () => {
                           color: active ? "#fff" : T.textMuted,
                           boxShadow: active ? `0 3px 10px ${tc.from}55` : "none",
                           transform: active ? "translateY(-1px)" : "none",
-                        }}>
-                        {v}
-                      </button>
+                        }}>{v}</button>
                     );
                   })}
                 </div>
@@ -869,7 +932,6 @@ const GradesInner = () => {
 
               <div style={{ height:1, background:T.divider }} />
 
-              {/* Interrogations */}
               <div>
                 <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
                   letterSpacing:"0.07em", color:"#6366f1", marginBottom:6 }}>
@@ -884,7 +946,6 @@ const GradesInner = () => {
                 </div>
               </div>
 
-              {/* Devoirs */}
               <div>
                 <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
                   letterSpacing:"0.07em", color:"#f97316", marginBottom:6 }}>
@@ -900,32 +961,39 @@ const GradesInner = () => {
               </div>
 
               {/* Submit */}
-              <button onClick={handleSubmit} disabled={saving} style={{
-                marginTop:4, width:"100%", display:"flex", alignItems:"center",
-                justifyContent:"center", gap:8, padding:"11px 16px",
-                borderRadius:12, border:"none", cursor: saving ? "not-allowed" : "pointer",
-                fontSize:13, fontWeight:800, color:"#fff", transition:"all .2s",
-                background: saving ? T.textMuted : isEditing
-                  ? "linear-gradient(135deg,#f59e0b,#f97316)"
-                  : `linear-gradient(135deg,${COL.from},${COL.to})`,
-                boxShadow: saving ? "none" : isEditing ? "0 4px 16px #f59e0b44" : `0 4px 16px ${COL.shadow}`,
-              }}>
-                {saving
-                  ? <FaSyncAlt style={{ width:13,height:13, animation:"spin 1s linear infinite" }} />
-                  : <FaSave style={{ width:13,height:13 }} />}
-                {saving ? "Enregistrement…" : isEditing ? "Mettre à jour" : "Enregistrer la note"}
-              </button>
+              {isLocked ? (
+                <div style={{
+                  marginTop:4, width:"100%", display:"flex", alignItems:"center",
+                  justifyContent:"center", gap:8, padding:"11px 16px",
+                  borderRadius:12, fontSize:13, fontWeight:800, color:"#f59e0b",
+                  background:"#f59e0b18", border:"1.5px solid #f59e0b33",
+                }}>
+                  <FaLock style={{ width:13,height:13 }} /> Verrouillé
+                </div>
+              ) : (
+                <button onClick={handleSubmit} disabled={saving} style={{
+                  marginTop:4, width:"100%", display:"flex", alignItems:"center",
+                  justifyContent:"center", gap:8, padding:"11px 16px",
+                  borderRadius:12, border:"none", cursor: saving ? "not-allowed" : "pointer",
+                  fontSize:13, fontWeight:800, color:"#fff", transition:"all .2s",
+                  background: saving ? T.textMuted : isEditing
+                    ? "linear-gradient(135deg,#f59e0b,#f97316)"
+                    : `linear-gradient(135deg,${COL.from},${COL.to})`,
+                  boxShadow: saving ? "none" : isEditing ? "0 4px 16px #f59e0b44" : `0 4px 16px ${COL.shadow}`,
+                }}>
+                  {saving
+                    ? <FaSyncAlt style={{ width:13,height:13, animation:"spin 1s linear infinite" }} />
+                    : <FaSave style={{ width:13,height:13 }} />}
+                  {saving ? "Enregistrement…" : isEditing ? "Mettre à jour" : "Enregistrer la note"}
+                </button>
+              )}
             </div>
           </div>
 
-          {/* RÉSULTATS — BUG FIX #4 : plus de className, inline keyframes */}
+          {/* RÉSULTATS */}
           <div>
             {loadingGrades ? (
-              <div style={{
-                display:"grid",
-                gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr",
-                gap:12,
-              }}>
+              <div style={{ display:"grid", gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr", gap:12 }}>
                 {[...Array(4)].map((_, i) => (
                   <div key={i} style={{
                     height:160, borderRadius:16,
@@ -947,24 +1015,19 @@ const GradesInner = () => {
                 }}>
                   <FaBookOpen style={{ width:26,height:26,color:COL.from,opacity:.5 }} />
                 </div>
-                <p style={{ fontSize:16, fontWeight:800, color:T.textSecondary }}>
-                  Aucune note trouvée
-                </p>
+                <p style={{ fontSize:16, fontWeight:800, color:T.textSecondary }}>Aucune note trouvée</p>
                 <p style={{ fontSize:12, color:T.textMuted, marginTop:6 }}>
                   Ajustez les filtres ou saisissez une nouvelle note via le formulaire.
                 </p>
               </div>
             ) : (
-              <div style={{
-                display:"grid",
-                gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr",
-                gap:12,
-              }}>
+              <div style={{ display:"grid", gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr", gap:12 }}>
                 {grades.map((g, i) => (
                   <GradeCard key={g.id} grade={g}
                     onEdit={handleEdit}
                     onDelete={handleDeleteRequest}
-                    animDelay={i * 30} />
+                    animDelay={i * 30}
+                    isLocked={isLocked} />
                 ))}
               </div>
             )}
