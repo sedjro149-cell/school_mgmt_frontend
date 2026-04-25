@@ -340,7 +340,7 @@ const CopyConfigModal = ({ sourceClass, schoolClasses, onClose, onSuccess, setMs
     if (!targetIds.length) { setMsg({ type:"error", text:"Sélectionnez au moins une classe cible." }); return; }
     setLoading(true);
     try {
-      const res = await postData("/academics/copy-class-config/", {
+      const res = await postData("/academics/class-subjects/copy-config/", {
         source_class_id: sourceClass.id,
         target_class_ids: targetIds,
         overwrite,

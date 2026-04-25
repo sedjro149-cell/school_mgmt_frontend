@@ -194,7 +194,7 @@ const Stepper = ({ value,min,max,onChange,accent }) => {
 /* ═══════════════════════════════════════════════════════════
    ONGLET 1 — VUE D'ENSEMBLE
 ═══════════════════════════════════════════════════════════ */
-const TabOverview = ({ classes, validTerms, toast }) => {
+const TabOverview = ({ classes, validTerms, toast, activeYearId }) => {
   const { dark } = useTheme();
   const T = dark?DARK:LIGHT;
 
@@ -208,14 +208,15 @@ const TabOverview = ({ classes, validTerms, toast }) => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchData("/academics/term-status/");
+      const qs = activeYearId ? `?school_year=${activeYearId}` : "";
+      const data = await fetchData(`/academics/term-status/${qs}`);
       setStatuses(Array.isArray(data) ? data : (data?.results??[]));
     } catch {
       toast("error","Impossible de charger les statuts.");
     } finally {
       setLoading(false);
     }
-  },[toast]);
+  },[toast, activeYearId]);
 
   useEffect(()=>{ load(); },[load]);
 
@@ -226,9 +227,9 @@ const TabOverview = ({ classes, validTerms, toast }) => {
   const ensureTs = async (classId, term) => {
     const existing = getTs(classId, term);
     if(existing) return existing;
-    const created = await postData("/academics/term-status/",{
-      school_class:parseInt(classId,10), term,
-    });
+    const payload = { school_class:parseInt(classId,10), term };
+    if(activeYearId) payload.school_year = activeYearId;
+    const created = await postData("/academics/term-status/", payload);
     return created;
   };
 
@@ -257,6 +258,41 @@ const TabOverview = ({ classes, validTerms, toast }) => {
     } finally {
       setActioning(null);
     }
+  };
+
+  // ── Actions en masse (lock/publish toutes les classes d'un trimestre) ─────
+  const [bulkProgress, setBulkProgress] = useState(null); // null | { term, action, done, total, errors }
+
+  const runBulkAction = async (term, action) => {
+    // Filtrer les classes éligibles selon l'action
+    const eligible = classes.filter(cls => {
+      const ts = getTs(cls.id, term);
+      if (action === "lock")    return !ts || ts.status === "draft";
+      if (action === "publish") return ts  && ts.status === "locked";
+      return false;
+    });
+    if (!eligible.length) {
+      toast("error", `Aucune classe éligible à l'action « ${action} » pour ${term}.`);
+      return;
+    }
+    setBulkProgress({ term, action, done:0, total:eligible.length, errors:0 });
+    let done = 0, errors = 0;
+    for (const cls of eligible) {
+      try {
+        const ts = await ensureTs(cls.id, term);
+        await postData(`/academics/term-status/${ts.id}/${action}/`, {});
+        done++;
+      } catch {
+        errors++;
+      }
+      setBulkProgress({ term, action, done, total:eligible.length, errors });
+    }
+    await load();
+    setBulkProgress(null);
+    const actionLabel = action === "lock" ? "verrouillées" : "publiées";
+    toast(errors > 0 ? "error" : "success",
+      `${done} classe${done > 1 ? "s" : ""} ${actionLabel} pour ${term}${errors > 0 ? ` (${errors} erreur${errors > 1 ? "s" : ""})` : ""}.`
+    );
   };
 
   // BUG 5 + BUG 7 FIX : cas unpublish ajouté, message publish corrigé
@@ -344,6 +380,72 @@ const TabOverview = ({ classes, validTerms, toast }) => {
           Toutes les actions sont réversibles.
         </p>
       </div>
+
+      {/* ── BARRE D'ACTIONS EN MASSE ─────────────────────────────────────────── */}
+      {classes.length > 0 && (
+        <div style={{
+          background:T.cardBg, borderRadius:13, border:`1.5px solid ${T.cardBorder}`,
+          padding:"12px 16px", marginBottom:14,
+          display:"flex", alignItems:"center", flexWrap:"wrap", gap:10,
+        }}>
+          <p style={{
+            fontSize:11, fontWeight:800, color:T.textSecondary,
+            letterSpacing:".06em", marginRight:4,
+          }}>ACTIONS EN MASSE</p>
+
+          {validTerms.map(term => {
+            const tc = TERM_COLORS[term];
+            const canLock    = classes.some(c => { const ts=getTs(c.id,term); return !ts||ts.status==="draft"; });
+            const canPublish = classes.some(c => { const ts=getTs(c.id,term); return ts&&ts.status==="locked"; });
+            const isBusy     = bulkProgress?.term === term;
+            return (
+              <div key={term} style={{
+                display:"flex", alignItems:"center", gap:6,
+                padding:"6px 12px", borderRadius:10,
+                background: dark ? `${tc.from}12` : `${tc.from}0a`,
+                border:`1px solid ${tc.from}33`,
+              }}>
+                <span style={{ fontSize:11, fontWeight:800, color:tc.from, minWidth:22 }}>{term}</span>
+                <span style={{ fontSize:10, color:T.textMuted, marginRight:2 }}>·</span>
+                <button
+                  onClick={() => runBulkAction(term, "lock")}
+                  disabled={!canLock || isBusy}
+                  style={{
+                    display:"flex", alignItems:"center", gap:5, padding:"4px 10px",
+                    borderRadius:8, border:"none",
+                    background: canLock && !isBusy ? "#f59e0b" : T.tableHead,
+                    color: canLock && !isBusy ? "#fff" : T.textMuted,
+                    fontSize:11, fontWeight:700,
+                    cursor: canLock && !isBusy ? "pointer" : "not-allowed",
+                    opacity: isBusy ? 0.6 : 1,
+                  }}>
+                  <FaLock style={{width:9,height:9}} />
+                  {isBusy && bulkProgress.action==="lock"
+                    ? `${bulkProgress.done}/${bulkProgress.total}`
+                    : "Verrouiller tout"}
+                </button>
+                <button
+                  onClick={() => runBulkAction(term, "publish")}
+                  disabled={!canPublish || isBusy}
+                  style={{
+                    display:"flex", alignItems:"center", gap:5, padding:"4px 10px",
+                    borderRadius:8, border:"none",
+                    background: canPublish && !isBusy ? "#10b981" : T.tableHead,
+                    color: canPublish && !isBusy ? "#fff" : T.textMuted,
+                    fontSize:11, fontWeight:700,
+                    cursor: canPublish && !isBusy ? "pointer" : "not-allowed",
+                    opacity: isBusy ? 0.6 : 1,
+                  }}>
+                  <FaEye style={{width:9,height:9}} />
+                  {isBusy && bulkProgress.action==="publish"
+                    ? `${bulkProgress.done}/${bulkProgress.total}`
+                    : "Publier tout"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {classes.length===0 ? (
         <div style={{
@@ -1121,11 +1223,13 @@ const TermManagerInner = () => {
   const { dark } = useTheme();
   const T = dark?DARK:LIGHT;
 
-  const [tab,         setTab]         = useState(0);
-  const [classes,     setClasses]     = useState([]);
-  const [nbTerms,     setNbTerms]     = useState(3);
-  const [msg,         setMsg]         = useState(null);
-  const [loadingMeta, setLoadingMeta] = useState(true);
+  const [tab,           setTab]           = useState(0);
+  const [classes,       setClasses]       = useState([]);
+  const [nbTerms,       setNbTerms]       = useState(3);
+  const [msg,           setMsg]           = useState(null);
+  const [loadingMeta,   setLoadingMeta]   = useState(true);
+  const [activeYearId,  setActiveYearId]  = useState(null);
+  const [activeYearLbl, setActiveYearLbl] = useState(null);
 
   const toast = useCallback((type,text)=>setMsg({type,text}),[]);
   const validTerms = TERMS_ALL.slice(0, nbTerms);
@@ -1134,12 +1238,16 @@ const TermManagerInner = () => {
     (async()=>{
       setLoadingMeta(true);
       try {
-        const [cls,cfg] = await Promise.all([
+        const [cls,cfg,yrs] = await Promise.all([
           fetchData("/academics/school-classes/").catch(()=>[]),
           fetchData("/academics/school-year-config/").catch(()=>null),
+          fetchData("/academics/school-years/").catch(()=>[]),
         ]);
         setClasses(Array.isArray(cls)?cls:(cls?.results??[]));
         if(cfg?.nb_terms) setNbTerms(cfg.nb_terms);
+        const yrArr = Array.isArray(yrs)?yrs:(yrs?.results??[]);
+        const active = yrArr.find(y=>y.is_active&&!y.is_closed);
+        if(active){ setActiveYearId(active.id); setActiveYearLbl(active.label); }
       } catch {
         toast("error","Erreur lors du chargement initial.");
       } finally {
@@ -1198,6 +1306,14 @@ const TermManagerInner = () => {
                     {nbTerms} trimestre{nbTerms>1?"s":""}
                   </span>
                 )}
+                {!loadingMeta&&activeYearLbl&&(
+                  <span style={{
+                    marginLeft:6,padding:"1px 8px",borderRadius:999,fontSize:9,
+                    fontWeight:800,background:"#10b98118",color:"#10b981",
+                  }}>
+                    {activeYearLbl}
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -1236,7 +1352,7 @@ const TermManagerInner = () => {
           </div>
         ) : (
           <>
-            {tab===0 && <TabOverview      classes={classes} validTerms={validTerms} toast={toast}/>}
+            {tab===0 && <TabOverview      classes={classes} validTerms={validTerms} toast={toast} activeYearId={activeYearId}/>}
             {tab===1 && <TabSubjectConfig classes={classes} validTerms={validTerms} toast={toast}/>}
             {tab===2 && <TabSchoolConfig  onNbTermsChange={n=>setNbTerms(n)} toast={toast}/>}
           </>

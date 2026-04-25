@@ -6,6 +6,7 @@ import {
   FaFileAlt, FaRegChartBar, FaMoneyBillWave, FaLayerGroup,
   FaChartPie, FaHome, FaSyncAlt, FaBolt, FaAngleDown,
   FaAngleRight, FaMoon, FaSun, FaCog,
+  FaCalendarAlt, FaUserGraduate, FaHistory, FaGraduationCap,
 } from "react-icons/fa";
 import { fetchData } from "./api";
 import usePreventTranslate from "./hooks/usePreventTranslate";
@@ -17,13 +18,14 @@ const ThemeCtx = createContext({ dark: false, toggle: () => {} });
 const useTheme = () => useContext(ThemeCtx);
 
 /* ═══════════════════════════════════════════
-   COLOR PALETTE — one vivid color per section
+   COLOR PALETTE
 ═══════════════════════════════════════════ */
 const PALETTE = {
-  personnel: { from: "#f97316", to: "#ef4444", text: "#f97316", light: "#fff7ed", darkBg: "#2a1006" },
-  academic:  { from: "#6366f1", to: "#8b5cf6", text: "#6366f1", light: "#eef2ff", darkBg: "#1a1836" },
-  finance:   { from: "#10b981", to: "#06b6d4", text: "#10b981", light: "#ecfdf5", darkBg: "#051f18" },
-  tool:      { from: "#f59e0b", to: "#f97316", text: "#f59e0b", light: "#fffbeb", darkBg: "#221a05" },
+  personnel:  { from: "#f97316", to: "#ef4444", text: "#f97316", light: "#fff7ed",  darkBg: "#2a1006" },
+  academic:   { from: "#3b82f6", to: "#06b6d4", text: "#3b82f6", light: "#eff6ff",  darkBg: "#0c1a2e" },
+  promotion:  { from: "#ec4899", to: "#8b5cf6", text: "#a855f7", light: "#fdf4ff",  darkBg: "#1e0a2e" },
+  finance:    { from: "#10b981", to: "#06b6d4", text: "#10b981", light: "#ecfdf5",  darkBg: "#051f18" },
+  tool:       { from: "#f59e0b", to: "#f97316", text: "#f59e0b", light: "#fffbeb",  darkBg: "#221a05" },
   stats: [
     { from: "#6366f1", to: "#8b5cf6" },
     { from: "#0ea5e9", to: "#06b6d4" },
@@ -33,7 +35,7 @@ const PALETTE = {
 };
 
 /* ═══════════════════════════════════════════
-   THEME TOKENS — light / dark
+   THEME TOKENS
 ═══════════════════════════════════════════ */
 const LIGHT = {
   pageBg:        "#f1f3f9",
@@ -72,33 +74,42 @@ const DARK = {
 
 /* ═══════════════════════════════════════════
    NAVIGATION SECTIONS
-   ✅ MODIFICATION : ajout de "Gestion Trimestres" dans Académique
 ═══════════════════════════════════════════ */
 const sections = [
   {
     name: "Personnel", key: "personnel", icon: FaUsers,
     items: [
-      { title: "Parents",      link: "/core/parents",    icon: FaUsers },
-      { title: "Étudiants",    link: "/core/students",   icon: FaUsers },
-      { title: "Enseignants",  link: "/core/teachers",   icon: FaChalkboardTeacher },
+      { title: "Parents",     link: "/core/parents",   icon: FaUsers },
+      { title: "Étudiants",   link: "/core/students",  icon: FaUsers },
+      { title: "Enseignants", link: "/core/teachers",  icon: FaChalkboardTeacher },
     ],
   },
   {
     name: "Académique", key: "academic", icon: FaSchool,
     items: [
-      { title: "Classes",               link: "/academics/school-classes",    icon: FaSchool },
-      { title: "Matières / classe",     link: "/academics/class-subjects",    icon: FaFileAlt },
-      { title: "Créneaux horaires",     link: "/academics/timeslots",         icon: FaClock },
-      { title: "Emploi du temps",       link: "/academics/timetable",         icon: FaClock },
-      { title: "Notes",                 link: "/academics/grades",            icon: FaPen },
-      { title: "Saisie massive",        link: "/academics/grades/bulk-entry", icon: FaLayerGroup },
-      { title: "Bulletins",             link: "/academics/reportcards",       icon: FaRegChartBar },
-      { title: "Gestion trimestres",    link: "/academics/term-manager",      icon: FaCog },
-      { title: "Annonces",              link: "/academics/anouncementmgmt",   icon: FaRegChartBar },
-      { title: "Présence",              link: "/academics/absences",          icon: FaLayerGroup },
-      { title: "Gestion emplois",       link: "/academics/timetable-manager", icon: FaLayerGroup },
-      { title: "Édition emplois",       link: "/academics/timetable-editor",  icon: FaLayerGroup },
-      { title: "Attribution classe",    link: "/academics/class-assignment",  icon: FaChalkboardTeacher },
+      { title: "Classes",            link: "/academics/school-classes",    icon: FaSchool },
+      { title: "Matières / classe",  link: "/academics/class-subjects",    icon: FaFileAlt },
+      { title: "Créneaux horaires",  link: "/academics/timeslots",         icon: FaClock },
+      { title: "Emploi du temps",    link: "/academics/timetable",         icon: FaClock },
+      { title: "Gestion emplois",    link: "/academics/timetable-manager", icon: FaLayerGroup },
+      { title: "Édition emplois",    link: "/academics/timetable-editor",  icon: FaLayerGroup },
+      { title: "Attribution classe", link: "/academics/class-assignment",  icon: FaChalkboardTeacher },
+      { title: "Notes",              link: "/academics/grades",            icon: FaPen },
+      { title: "Saisie massive",     link: "/academics/grades/bulk-entry", icon: FaLayerGroup },
+      { title: "Bulletins",          link: "/academics/reportcards",       icon: FaRegChartBar },
+      { title: "Annonces",           link: "/academics/anouncementmgmt",   icon: FaRegChartBar },
+      { title: "Présence",           link: "/academics/absences",          icon: FaLayerGroup },
+    ],
+  },
+  {
+    // Tout ce qui touche au cycle annuel, trimestres et passage de classe
+    name: "Années & Promotions", key: "promotion", icon: FaCalendarAlt,
+    items: [
+      { title: "Niveaux scolaires",   link: "/academics/levels",              icon: FaGraduationCap },
+      { title: "Années scolaires",    link: "/academics/school-years",        icon: FaCalendarAlt },
+      { title: "Gestion trimestres",  link: "/academics/term-manager",        icon: FaCog },
+      { title: "Fin d'année",         link: "/academics/year-end-promotion",  icon: FaUserGraduate },
+      { title: "Journal promotions",  link: "/academics/promotion-records",   icon: FaHistory },
     ],
   },
   {
@@ -250,10 +261,7 @@ const DarkToggle = () => {
     >
       <div
         className="absolute top-0.5 w-6 h-6 rounded-full bg-white flex items-center justify-center transition-all duration-300"
-        style={{
-          left: dark ? "calc(100% - 26px)" : "2px",
-          boxShadow: "0 2px 6px rgba(0,0,0,0.25)",
-        }}
+        style={{ left: dark ? "calc(100% - 26px)" : "2px", boxShadow: "0 2px 6px rgba(0,0,0,0.25)" }}
       >
         {dark
           ? <FaMoon className="w-3 h-3" style={{ color: "#6366f1" }} />
@@ -458,6 +466,81 @@ const SectionHeader = ({ title, count, paletteKey }) => {
 };
 
 /* ═══════════════════════════════════════════
+   YEAR STATUS BANNER
+   Affiche un bandeau si une année est active,
+   avec accès rapide au workflow de fin d'année
+═══════════════════════════════════════════ */
+const YearBanner = ({ navigate }) => {
+  const { dark } = useTheme();
+  const T = dark ? DARK : LIGHT;
+  const col = PALETTE.promotion;
+  const [activeYear, setActiveYear] = useState(null);
+
+  useEffect(() => {
+    fetchData("/academics/school-years/")
+      .then(data => {
+        const arr = Array.isArray(data) ? data : data?.results ?? [];
+        setActiveYear(arr.find(y => y.is_active && !y.is_closed) ?? null);
+      })
+      .catch(() => {});
+  }, []);
+
+  if (!activeYear) return null;
+
+  return (
+    <div
+      className="flex items-center justify-between px-4 py-3 rounded-xl mb-6"
+      style={{
+        background: dark ? col.darkBg : col.light,
+        border: `1px solid ${col.from}33`,
+      }}
+    >
+      <div className="flex items-center gap-3">
+        <div
+          className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+          style={{ background: `linear-gradient(135deg, ${col.from}, ${col.to})`, boxShadow: `0 4px 12px ${col.from}44` }}
+        >
+          <FaCalendarAlt className="w-3.5 h-3.5 text-white" />
+        </div>
+        <div>
+          <p className="text-sm font-bold" style={{ color: T.textPrimary }}>
+            Année active : {activeYear.label}
+          </p>
+          <p className="text-xs" style={{ color: T.textMuted }}>
+            {activeYear.nb_terms} trimestre{activeYear.nb_terms > 1 ? "s" : ""} · Seuil de passage : {activeYear.passing_average}/20
+          </p>
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={() => navigate("/academics/term-manager")}
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg focus:outline-none transition-all"
+          style={{
+            border: `1px solid ${col.from}44`,
+            color: col.text,
+            background: "transparent",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = `${col.from}18`)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          Trimestres
+        </button>
+        <button
+          onClick={() => navigate("/academics/year-end-promotion")}
+          className="text-xs font-bold px-3 py-1.5 rounded-lg text-white focus:outline-none transition-all"
+          style={{
+            background: `linear-gradient(135deg, ${col.from}, ${col.to})`,
+            boxShadow: `0 3px 10px ${col.from}44`,
+          }}
+        >
+          Fin d'année →
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════
    DASHBOARD INNER
 ═══════════════════════════════════════════ */
 const DashboardInner = () => {
@@ -500,6 +583,12 @@ const DashboardInner = () => {
   const totalSex    = male + female;
   const malePercent = totalSex ? Math.round((male / totalSex) * 100) : 0;
   const nice = (n) => (n === null || n === undefined ? "—" : n >= 1000 ? n.toLocaleString() : String(n));
+
+  // sections[0]=Personnel, sections[1]=Académique, sections[2]=Promotions, sections[3]=Finance
+  const secPersonnel  = sections[0];
+  const secAcademic   = sections[1];
+  const secPromotion  = sections[2];
+  const secFinance    = sections[3];
 
   return (
     <div
@@ -551,6 +640,9 @@ const DashboardInner = () => {
 
         <main className="px-8 py-7 space-y-10">
 
+          {/* ── Bandeau année active ── */}
+          <YearBanner navigate={navigate} />
+
           {/* ── Stats ── */}
           <section>
             <SectionHeader title="Vue d'ensemble" paletteKey="academic" />
@@ -560,19 +652,19 @@ const DashboardInner = () => {
               </div>
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-5">
-                <StatCard title="Étudiants"    value={nice(stats.students_count)} subtitle="Inscrits actifs"    colorIdx={0} icon={FaUsers}             onClick={() => navigate("/core/students")} />
-                <StatCard title="Enseignants"  value={nice(stats.teachers_count)} subtitle="Corps enseignant"  colorIdx={1} icon={FaChalkboardTeacher} onClick={() => navigate("/core/teachers")} />
-                <StatCard title="Parents"      value={nice(stats.parents_count)}  subtitle="Comptes connectés" colorIdx={2} icon={FaUsers}             onClick={() => navigate("/core/parents")} />
-                <StatCard title="Répartition"  value={`${male} / ${female}`}      subtitle={`${malePercent}% garçons`} colorIdx={3} icon={FaRegChartBar} onClick={() => navigate("/core/students")} />
+                <StatCard title="Étudiants"   value={nice(stats.students_count)} subtitle="Inscrits actifs"    colorIdx={0} icon={FaUsers}             onClick={() => navigate("/core/students")} />
+                <StatCard title="Enseignants" value={nice(stats.teachers_count)} subtitle="Corps enseignant"  colorIdx={1} icon={FaChalkboardTeacher} onClick={() => navigate("/core/teachers")} />
+                <StatCard title="Parents"     value={nice(stats.parents_count)}  subtitle="Comptes connectés" colorIdx={2} icon={FaUsers}             onClick={() => navigate("/core/parents")} />
+                <StatCard title="Répartition" value={`${male} / ${female}`}      subtitle={`${malePercent}% garçons`} colorIdx={3} icon={FaRegChartBar} onClick={() => navigate("/core/students")} />
               </div>
             )}
           </section>
 
           {/* ── Personnel ── */}
           <section>
-            <SectionHeader title="Personnel" count={sections[0].items.length} paletteKey="personnel" />
+            <SectionHeader title="Personnel" count={secPersonnel.items.length} paletteKey="personnel" />
             <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-              {sections[0].items.map((c, i) => (
+              {secPersonnel.items.map((c, i) => (
                 <ActionCard key={i} title={c.title} icon={c.icon} paletteKey="personnel" onClick={() => navigate(c.link)} />
               ))}
             </div>
@@ -580,20 +672,38 @@ const DashboardInner = () => {
 
           {/* ── Académique ── */}
           <section>
-            <SectionHeader title="Académique" count={sections[1].items.length} paletteKey="academic" />
+            <SectionHeader title="Académique" count={secAcademic.items.length} paletteKey="academic" />
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-              {sections[1].items.map((c, i) => (
+              {secAcademic.items.map((c, i) => (
                 <ActionCard key={i} title={c.title} icon={c.icon} paletteKey="academic" onClick={() => navigate(c.link)} />
               ))}
             </div>
           </section>
 
-          {/* ── Finance + Outil ── */}
+          {/* ── Années & Promotions ── */}
+          <section>
+            <SectionHeader title="Années & Promotions" count={secPromotion.items.length} paletteKey="promotion" />
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {secPromotion.items.map((c, i) => (
+                <ActionCard
+                  key={i}
+                  title={c.title}
+                  icon={c.icon}
+                  paletteKey="promotion"
+                  // "Fin d'année" mis en avant comme action principale
+                  featured={c.link === "/academics/year-end-promotion"}
+                  onClick={() => navigate(c.link)}
+                />
+              ))}
+            </div>
+          </section>
+
+          {/* ── Finance + Outils ── */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <section className="lg:col-span-2">
-              <SectionHeader title="Finance" count={sections[2].items.length} paletteKey="finance" />
+              <SectionHeader title="Finance" count={secFinance.items.length} paletteKey="finance" />
               <div className="grid grid-cols-2 gap-3">
-                {sections[2].items.map((c, i) => (
+                {secFinance.items.map((c, i) => (
                   <ActionCard key={i} title={c.title} icon={c.icon} paletteKey="finance" onClick={() => navigate(c.link)} />
                 ))}
               </div>

@@ -331,6 +331,8 @@ const ReportCardsInner = () => {
   const [loadingReport,   setLoadingReport]   = useState(false);
   const [msg,             setMsg]             = useState(null);
   const [termStatus,      setTermStatus]      = useState(null);
+  const [activeYear,      setActiveYear]      = useState(null);
+  const [nbTerms,         setNbTerms]         = useState(3);
 
   const printableRef = useRef(null);
 
@@ -348,12 +350,19 @@ const ReportCardsInner = () => {
     fetchTermStatus(classId, term);
   }, [classId, term, fetchTermStatus]);
 
-  /* ── Fetch classes ── */
+  /* ── Fetch classes + année active ── */
   const fetchClasses = useCallback(async () => {
     setLoadingClasses(true);
     try {
-      const data = await fetchData("/academics/school-classes/");
-      setClasses(Array.isArray(data) ? data : []);
+      const [clsData, yrData] = await Promise.all([
+        fetchData("/academics/school-classes/"),
+        fetchData("/academics/school-years/").catch(() => []),
+      ]);
+      setClasses(Array.isArray(clsData) ? clsData : []);
+      const yrArr = Array.isArray(yrData) ? yrData : yrData?.results ?? [];
+      const active = yrArr.find(y => y.is_active && !y.is_closed) ?? null;
+      setActiveYear(active);
+      if (active?.nb_terms) setNbTerms(active.nb_terms);
     } catch (err) {
       handleApiError(err);
       setMsg({ type:"error", text:"Impossible de charger les classes." });
@@ -446,11 +455,15 @@ const ReportCardsInner = () => {
     setClassId(""); setStudentId(""); setStudents([]); setReportCard(null); setTermStatus(null);
   };
 
-  const TERM_COLORS = {
+  const ALL_TERM_COLORS = {
     T1: { from:"#3b82f6", to:"#06b6d4" },
     T2: { from:"#10b981", to:"#14b8a6" },
     T3: { from:COL.from,  to:COL.to    },
   };
+  // Seuls les trimestres de l'année active sont disponibles
+  const TERM_COLORS = Object.fromEntries(
+    Object.entries(ALL_TERM_COLORS).slice(0, nbTerms)
+  );
 
   /* ══ RENDER ══ */
   return (
@@ -481,6 +494,14 @@ const ReportCardsInner = () => {
               </h1>
               <p style={{ fontSize:11, color:T.textMuted, marginTop:1 }}>
                 Consultation et export des bulletins par trimestre
+                {activeYear && (
+                  <span style={{
+                    marginLeft:8, padding:"1px 8px", borderRadius:999, fontSize:9,
+                    fontWeight:800, background:`${COL.from}18`, color:COL.from,
+                  }}>
+                    {activeYear.label} · {nbTerms} trimestre{nbTerms > 1 ? "s" : ""}
+                  </span>
+                )}
               </p>
             </div>
           </div>

@@ -18,6 +18,7 @@ import TimetableManager from "./pages/TimetableManager";
 import AnnouncementManagement from './pages/AnnouncementManagement';
 import Absences from './pages/Absences';
 import TermManager from "./pages/TermManager";
+import HonorRoll from "./pages/Honorroll";
 
 
 import GenerateTimetable from "./pages/GenerateTimetable";
@@ -29,6 +30,9 @@ import ReportCards from "./pages/ReportCards";
 import Login from "./pages/Login";
 import Fees from "./pages/Fees";
 import FeesStatistics from "./pages/FeesStatistics";
+import SchoolYears from "./pages/SchoolYears";
+import YearEndPromotion from "./pages/YearEndPromotion";
+import PromotionRecords from "./pages/PromotionRecords";
 
 // 🔹 Composant pour protéger les routes
 const PrivateRoute = ({ element }) => {
@@ -67,7 +71,11 @@ function App() {
         <Route path="/academics/anouncementmgmt" element={<PrivateRoute element={<AnnouncementManagement />} />} />
         <Route path="/academics/absences" element={<PrivateRoute element={<Absences />} />} />
         <Route path="/academics/class-assignment" element={<PrivateRoute element={<TeacherClassAssignment />} />} />
- 
+        <Route path="/academics/school-years" element={<PrivateRoute element={<SchoolYears />} />} />
+        <Route path="/academics/year-end-promotion" element={<PrivateRoute element={<YearEndPromotion />} />} />
+        <Route path="/academics/promotion-records" element={<PrivateRoute element={<PromotionRecords />} />} />
+        <Route path="/academics/honorroll" element={<PrivateRoute element={<HonorRoll />} />} />
+
 
 
         {/* 🔹 Redirection par défaut */}

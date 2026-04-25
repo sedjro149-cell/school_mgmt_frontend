@@ -109,6 +109,16 @@ export const SECTION_PALETTE = {
     darkBg:  "#051f18",
     shadow:  "#10b98140",
   },
+  // Promotion / fin d'année ─ rose → violet
+  promotion: {
+    from:    "#ec4899",
+    to:      "#8b5cf6",
+    mid:     "#a855f7",
+    text:    "#a855f7",
+    lightBg: "#fdf4ff",
+    darkBg:  "#1e0a2e",
+    shadow:  "#a855f740",
+  },
   // Outils ─ ambre → orange
   tool: {
     from:    "#f59e0b",

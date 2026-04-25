@@ -18,7 +18,7 @@ import {
   SECTION_PALETTE, BASE_KEYFRAMES,
 } from "./theme";
 
-const COL = SECTION_PALETTE.academic; // bleu → cyan
+const COL = SECTION_PALETTE.academic;
 
 /* ──────────────────────────────────────────────────────────────────
    CONSTANTS
@@ -32,17 +32,21 @@ const WEEKDAYS = [
   { v: 6, label: "Samedi"   },
 ];
 
-// Gradient pair per class (cycles if > 8 classes)
-const CLASS_GRADIENTS = [
-  ["#3b82f6","#06b6d4"],
-  ["#8b5cf6","#6366f1"],
-  ["#10b981","#14b8a6"],
-  ["#f97316","#ef4444"],
-  ["#f59e0b","#d97706"],
-  ["#db2777","#be185d"],
-  ["#0ea5e9","#0284c7"],
-  ["#84cc16","#10b981"],
+// 8 couleurs plates perceptuellement maximalement distinctes.
+// Critères : hue espacés de ~45°, luminosité homogène, lisibles sur fond clair ET foncé.
+// Aucun dégradé, aucune ressemblance entre voisins.
+const CLASS_COLORS = [
+  "#2563eb", // Bleu cobalt
+  "#dc2626", // Rouge vif
+  "#16a34a", // Vert émeraude
+  "#ea580c", // Orange brûlé
+  "#7c3aed", // Violet profond
+  "#0891b2", // Cyan sarcelle
+  "#db2777", // Rose framboise
+  "#65a30d", // Vert olive
 ];
+
+const MAX_SELECTED = 3; // ← maximum 3 classes simultanées
 
 const fmtTime = (t) => {
   if (!t) return "";
@@ -76,8 +80,7 @@ const DarkToggle = () => {
       style={{
         position:"relative", width:52, height:28, borderRadius:999, border:"none",
         cursor:"pointer", flexShrink:0, outline:"none", transition:"all .3s",
-        background: dark ? "linear-gradient(135deg,#6366f1,#8b5cf6)"
-          : `linear-gradient(135deg,${COL.from},${COL.to})`,
+        background: dark ? "#6366f1" : COL.from,
         boxShadow: hov ? `0 0 18px ${COL.shadow}` : "0 2px 8px rgba(0,0,0,.2)",
       }}>
       <div style={{
@@ -103,9 +106,8 @@ const Toast = ({ msg, onClose }) => {
       display:"flex", alignItems:"center", gap:10, padding:"13px 18px",
       borderRadius:14, cursor:"pointer", fontWeight:700, fontSize:12,
       color:"#fff", animation:"slideUp .3s cubic-bezier(.34,1.56,.64,1)", maxWidth:340,
-      background: isErr ? "linear-gradient(135deg,#ef4444,#dc2626)"
-        : `linear-gradient(135deg,${COL.from},${COL.to})`,
-      boxShadow: isErr ? "0 8px 24px #ef444444" : `0 8px 24px ${COL.shadow}`,
+      background: isErr ? "#dc2626" : "#16a34a",
+      boxShadow: isErr ? "0 8px 24px #dc262644" : "0 8px 24px #16a34a44",
     }}>
       {isErr
         ? <FaExclamationTriangle style={{ flexShrink:0,width:13,height:13 }} />
@@ -115,7 +117,6 @@ const Toast = ({ msg, onClose }) => {
   );
 };
 
-/* Labeled field */
 const FL = ({ children }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
@@ -127,7 +128,6 @@ const FL = ({ children }) => {
   );
 };
 
-/* Styled input for modal */
 const MI = (props) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
@@ -147,7 +147,6 @@ const MI = (props) => {
   );
 };
 
-/* Styled select for modal */
 const MS = ({ children, ...props }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
@@ -169,72 +168,75 @@ const MS = ({ children, ...props }) => {
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   ENTRY CHIP — une case dans la grille
+   ENTRY CHIP — couleur plate accentuée, aucun dégradé
 ────────────────────────────────────────────────────────────────── */
-const EntryChip = ({ entry, gradient, onEdit, onDelete }) => {
+const EntryChip = ({ entry, color, onEdit, onDelete }) => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
   const [hov, setHov] = useState(false);
-  const [from, to] = gradient;
+
+  // Fond : couleur pleine à forte opacité pour une lisibilité nette
+  const bgNormal = dark ? `${color}38` : `${color}22`;
+  const bgHover  = dark ? `${color}52` : `${color}33`;
 
   return (
     <div
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
       style={{
-        borderLeft: `3px solid ${from}`,
-        borderRadius: "0 7px 7px 0",
-        padding: "5px 7px",
         position: "relative",
+        borderRadius: "0 8px 8px 0",
+        borderLeft: `4px solid ${color}`,
+        // Bande supérieure pleine de la couleur — l'accentuation clé
+        borderTop: `2px solid ${color}`,
+        background: hov ? bgHover : bgNormal,
+        padding: "5px 8px 6px",
         transition: "all .15s",
-        background: hov
-          ? (dark ? `${from}28` : `${from}14`)
-          : (dark ? `${from}18` : `${from}0c`),
-        border: `1px solid ${hov ? from+"55" : from+"28"}`,
-        borderLeft: `3px solid ${from}`,
+        boxShadow: hov ? `0 2px 10px ${color}44` : `0 1px 4px ${color}22`,
       }}>
-      {/* Subject */}
+      {/* Matière */}
       <p style={{
         fontSize: 11, fontWeight: 800, lineHeight: 1.2,
-        color: dark ? `${from}ee` : from,
+        color: color,
         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         maxWidth: 120,
       }}>
         {entry.subject_name || "—"}
       </p>
-      {/* Teacher */}
+      {/* Enseignant */}
       <p style={{
-        fontSize: 10, color: T.textSecondary, marginTop: 1,
+        fontSize: 10, marginTop: 2,
+        color: dark ? `${color}cc` : T.textSecondary,
         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120,
         display: "flex", alignItems: "center", gap: 3,
       }}>
-        <FaChalkboardTeacher style={{ width:8,height:8,flexShrink:0,color:T.textMuted }} />
+        <FaChalkboardTeacher style={{ width:8,height:8,flexShrink:0,color:dark ? `${color}99` : T.textMuted }} />
         {entry.teacher_name || "—"}
       </p>
-      {/* Room */}
+      {/* Salle */}
       {entry.room && (
         <p style={{
-          fontSize: 9, color: T.textMuted, marginTop: 2,
+          fontSize: 9, color: dark ? `${color}99` : T.textMuted, marginTop: 2,
           display: "flex", alignItems: "center", gap: 3,
         }}>
           <FaMapMarkerAlt style={{ width:7,height:7,flexShrink:0 }} />
           {entry.room}
         </p>
       )}
-      {/* Hover actions */}
+      {/* Actions hover */}
       {hov && (
         <div style={{
           position: "absolute", top: 4, right: 4,
-          display: "flex", gap: 2,
+          display: "flex", gap: 3,
           animation: "fadeIn .1s ease-out",
         }}>
           <button onClick={(e) => { e.stopPropagation(); onEdit(entry); }}
             style={{
               width: 20, height: 20, borderRadius: 5, border: "none",
               background: dark ? "#1e293b" : "#fff",
-              boxShadow: "0 1px 4px rgba(0,0,0,.2)",
+              boxShadow: "0 1px 4px rgba(0,0,0,.25)",
               cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-              color: from,
+              color: color,
             }}>
             <FaEdit style={{ width: 9, height: 9 }} />
           </button>
@@ -242,9 +244,9 @@ const EntryChip = ({ entry, gradient, onEdit, onDelete }) => {
             style={{
               width: 20, height: 20, borderRadius: 5, border: "none",
               background: dark ? "#1e293b" : "#fff",
-              boxShadow: "0 1px 4px rgba(0,0,0,.2)",
+              boxShadow: "0 1px 4px rgba(0,0,0,.25)",
               cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-              color: "#ef4444",
+              color: "#dc2626",
             }}>
             <FaTrash style={{ width: 9, height: 9 }} />
           </button>
@@ -264,7 +266,6 @@ const EntryModal = ({
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
 
-  // Slots disponibles pour le jour sélectionné
   const slotsForDay = useMemo(
     () => timeSlots.filter((s) => String(s.day) === String(form.weekday))
           .slice().sort((a,b) => timeToMin(a.start_time) - timeToMin(b.start_time)),
@@ -290,8 +291,8 @@ const EntryModal = ({
         borderRadius:20, boxShadow:"0 24px 64px rgba(0,0,0,.45)",
         animation:"panelUp .3s cubic-bezier(.34,1.4,.64,1)",
       }}>
-        {/* Bande */}
-        <div style={{ height:5, flexShrink:0, background:`linear-gradient(90deg,${COL.from},${COL.to})` }} />
+        {/* Bande — plate, aucun dégradé */}
+        <div style={{ height:5, flexShrink:0, background:COL.from }} />
 
         {/* Header */}
         <div style={{
@@ -302,7 +303,7 @@ const EntryModal = ({
             <div style={{
               width:34, height:34, borderRadius:10, flexShrink:0,
               display:"flex", alignItems:"center", justifyContent:"center",
-              background:`linear-gradient(135deg,${COL.from},${COL.to})`,
+              background:COL.from,
               boxShadow:`0 4px 12px ${COL.shadow}`,
             }}>
               <FaCalendarAlt style={{ width:14,height:14,color:"#fff" }} />
@@ -330,7 +331,6 @@ const EntryModal = ({
         <div style={{ flex:1, overflowY:"auto", padding:20, display:"flex", flexDirection:"column", gap:14 }}
           className="custom-scrollbar">
 
-          {/* Classe */}
           <div>
             <FL>Classe *</FL>
             <MS value={form.school_class} onChange={(e) => setForm((p) => ({ ...p, school_class: e.target.value }))}>
@@ -339,7 +339,6 @@ const EntryModal = ({
             </MS>
           </div>
 
-          {/* Matière */}
           <div>
             <FL>Matière *</FL>
             <MS value={form.subject} onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))}>
@@ -348,7 +347,6 @@ const EntryModal = ({
             </MS>
           </div>
 
-          {/* Enseignant */}
           <div>
             <FL>Enseignant</FL>
             <MS value={form.teacher || ""} onChange={(e) => setForm((p) => ({ ...p, teacher: e.target.value }))}>
@@ -357,7 +355,6 @@ const EntryModal = ({
             </MS>
           </div>
 
-          {/* Jour */}
           <div>
             <FL>Jour *</FL>
             <MS value={form.weekday}
@@ -367,7 +364,6 @@ const EntryModal = ({
             </MS>
           </div>
 
-          {/* Créneau horaire */}
           {form.weekday && slotsForDay.length > 0 && (
             <div>
               <FL>Créneau prédéfini <span style={{ fontWeight:400,textTransform:"none",letterSpacing:0,fontSize:10 }}>(remplit les horaires)</span></FL>
@@ -382,7 +378,6 @@ const EntryModal = ({
             </div>
           )}
 
-          {/* Horaires manuels */}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <div>
               <FL>Début *</FL>
@@ -396,7 +391,6 @@ const EntryModal = ({
             </div>
           </div>
 
-          {/* Salle */}
           <div>
             <FL>Salle</FL>
             <MI placeholder="ex : Salle 12, Labo B…"
@@ -422,7 +416,7 @@ const EntryModal = ({
               display:"flex", alignItems:"center", gap:8,
               padding:"9px 22px", borderRadius:10, border:"none", cursor:"pointer",
               fontSize:12, fontWeight:800, color:"#fff",
-              background: saving ? T.textMuted : `linear-gradient(135deg,${COL.from},${COL.to})`,
+              background: saving ? T.textMuted : COL.from,
               boxShadow: saving ? "none" : `0 4px 14px ${COL.shadow}`,
             }}>
             {saving
@@ -437,19 +431,18 @@ const EntryModal = ({
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   PAGE PRINCIPALE (inner)
+   PAGE PRINCIPALE
 ────────────────────────────────────────────────────────────────── */
 const TimetableInner = () => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
 
-  /* ── State ── */
   const [classes,      setClasses]      = useState([]);
   const [subjects,     setSubjects]     = useState([]);
   const [teachers,     setTeachers]     = useState([]);
   const [timeSlots,    setTimeSlots]    = useState([]);
-  const [entriesMap,   setEntriesMap]   = useState({});   // { [classId]: Entry[] }
-  const [selectedCls,  setSelectedCls]  = useState([]);   // classId[]
+  const [entriesMap,   setEntriesMap]   = useState({});
+  const [selectedCls,  setSelectedCls]  = useState([]);  // max MAX_SELECTED items
   const [loading,      setLoading]      = useState(true);
   const [savingModal,  setSavingModal]  = useState(false);
   const [showModal,    setShowModal]    = useState(false);
@@ -457,18 +450,16 @@ const TimetableInner = () => {
   const [searchText,   setSearchText]   = useState("");
   const [msg,          setMsg]          = useState(null);
 
-  /* ── Refs pour éviter les race conditions sur le cache ── */
-  const fetchingRef = useRef(new Set());   // classIds en cours de fetch
-  const cachedRef   = useRef(new Set());   // classIds déjà cachés
+  const fetchingRef = useRef(new Set());
+  const cachedRef   = useRef(new Set());
   const pdfRef      = useRef(null);
 
-  /* ── Color map : classId → gradient pair ── */
-  const classGradient = useCallback((classId) => {
+  // Couleur plate par classId — déterministe selon la position dans la liste
+  const classColor = useCallback((classId) => {
     const idx = classes.findIndex((c) => c.id === classId);
-    return CLASS_GRADIENTS[(idx >= 0 ? idx : classId) % CLASS_GRADIENTS.length];
+    return CLASS_COLORS[(idx >= 0 ? idx : classId) % CLASS_COLORS.length];
   }, [classes]);
 
-  /* ── Fetch initial (classes, subjects, teachers, time-slots) ── */
   const fetchInitial = useCallback(async () => {
     setLoading(true);
     try {
@@ -491,12 +482,10 @@ const TimetableInner = () => {
 
   useEffect(() => { fetchInitial(); }, [fetchInitial]);
 
-  /* ── Fetch entries pour une classe (avec cache via refs) ── */
   const fetchClassEntries = useCallback(async (classId, force = false) => {
     if (!classId) return;
-    if (fetchingRef.current.has(classId)) return;    // déjà en cours
-    if (!force && cachedRef.current.has(classId)) return; // déjà en cache
-
+    if (fetchingRef.current.has(classId)) return;
+    if (!force && cachedRef.current.has(classId)) return;
     fetchingRef.current.add(classId);
     try {
       const data = await fetchData(`/academics/timetable/?school_class=${classId}`);
@@ -507,26 +496,30 @@ const TimetableInner = () => {
     finally { fetchingRef.current.delete(classId); }
   }, []);
 
-  /* ── Rafraîchit les classes sélectionnées (force re-fetch) ── */
   const refreshSelected = useCallback(async () => {
     const ids = [...selectedCls];
     if (!ids.length) return;
-    // Invalider le cache pour ces classes
     ids.forEach((id) => cachedRef.current.delete(id));
     await Promise.all(ids.map((id) => fetchClassEntries(id, true)));
   }, [selectedCls, fetchClassEntries]);
 
-  /* ── Toggle classe sélectionnée (max 4) ── */
+  /* ── Toggle : max MAX_SELECTED classes.
+     Si déjà sélectionnée → désélectionner.
+     Si MAX_SELECTED atteint → retirer la PREMIÈRE (la plus ancienne) et ajouter la nouvelle. */
   const toggleClass = useCallback((id) => {
     setSelectedCls((prev) => {
       if (prev.includes(id)) return prev.filter((x) => x !== id);
-      const next = prev.length >= 4 ? [...prev.slice(-3), id] : [...prev, id];
+      if (prev.length >= MAX_SELECTED) {
+        // FIFO : la première sélectionnée saute
+        const next = [...prev.slice(1), id];
+        fetchClassEntries(id);
+        return next;
+      }
       fetchClassEntries(id);
-      return next;
+      return [...prev, id];
     });
   }, [fetchClassEntries]);
 
-  /* ── Computed: entrées combinées des classes sélectionnées ── */
   const combinedEntries = useMemo(() => {
     let arr = [];
     selectedCls.forEach((id) => {
@@ -536,7 +529,6 @@ const TimetableInner = () => {
     return arr;
   }, [entriesMap, selectedCls]);
 
-  /* ── Filtrage par recherche ── */
   const displayedEntries = useMemo(() => {
     if (!searchText.trim()) return combinedEntries;
     const q = searchText.toLowerCase();
@@ -546,7 +538,6 @@ const TimetableInner = () => {
     );
   }, [combinedEntries, searchText]);
 
-  /* ── Time labels depuis time-slots (pour les lignes de la grille) ── */
   const timeLabels = useMemo(() => {
     const seen = new Set();
     const arr = [];
@@ -559,7 +550,6 @@ const TimetableInner = () => {
       .map((x) => x.lbl);
   }, [timeSlots]);
 
-  /* ── Grille : grid[weekday][timeLabel] = Entry[] ── */
   const grid = useMemo(() => {
     const g = {};
     WEEKDAYS.forEach((d) => {
@@ -574,7 +564,6 @@ const TimetableInner = () => {
     return g;
   }, [displayedEntries, timeLabels]);
 
-  /* ── Classes visibles dans la légende ── */
   const legendClasses = useMemo(() => {
     const present = new Set(displayedEntries.map((e) => e.school_class));
     return selectedCls
@@ -583,7 +572,6 @@ const TimetableInner = () => {
       .filter(Boolean);
   }, [displayedEntries, selectedCls, classes]);
 
-  /* ── Handlers ── */
   const openAdd = () => {
     setForm({ id:null, school_class:"", subject:"", teacher:"", weekday:"", starts_at:"", ends_at:"", room:"" });
     setShowModal(true);
@@ -605,7 +593,6 @@ const TimetableInner = () => {
 
   const submitForm = async () => {
     const { id, ...payload } = form;
-    // Validation minimale
     if (!payload.school_class || !payload.subject || !payload.weekday || !payload.starts_at || !payload.ends_at) {
       setMsg({ type:"error", text:"Veuillez remplir tous les champs obligatoires (*)." });
       return;
@@ -643,7 +630,6 @@ const TimetableInner = () => {
     } catch { setMsg({ type:"error", text:"Erreur lors de l'export PDF." }); }
   };
 
-  /* ── Rendu d'une cellule ── */
   const renderCell = (day, tl) => {
     const entries = grid[day]?.[tl] ?? [];
     if (!entries.length) {
@@ -656,7 +642,6 @@ const TimetableInner = () => {
         </div>
       );
     }
-    // Groupe par classe (au cas où plusieurs classes partagent le même créneau)
     const byClass = {};
     entries.forEach((e) => {
       if (!byClass[e.school_class]) byClass[e.school_class] = [];
@@ -664,14 +649,14 @@ const TimetableInner = () => {
     });
     const orderedIds = selectedCls.filter((id) => byClass[id]);
     return (
-      <div style={{ display:"flex", flexDirection:"column", gap:4, padding:"4px 2px" }}>
+      <div style={{ display:"flex", flexDirection:"column", gap:5, padding:"4px 2px" }}>
         {orderedIds.map((cid) => {
           const e = byClass[cid][0];
           return (
             <EntryChip
               key={cid}
               entry={e}
-              gradient={classGradient(cid)}
+              color={classColor(cid)}
               onEdit={openEdit}
               onDelete={deleteEntry}
             />
@@ -681,15 +666,11 @@ const TimetableInner = () => {
     );
   };
 
-  /* ── Dimensions grille ── */
   const TIME_COL = 88;
   const DAY_COL  = 148;
   const gridCols = `${TIME_COL}px repeat(6, ${DAY_COL}px)`;
   const gridMinW = TIME_COL + 6 * DAY_COL;
 
-  /* ══════════════════════════════════════════════════
-     RENDER
-  ══════════════════════════════════════════════════ */
   return (
     <div style={{ minHeight:"100vh", background:T.pageBg, transition:"background .3s",
       fontFamily:"'Plus Jakarta Sans', sans-serif", paddingBottom:60 }}>
@@ -703,12 +684,11 @@ const TimetableInner = () => {
       }}>
         <div style={{ maxWidth:1400, margin:"0 auto", padding:"12px 24px",
           display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
-          {/* Title */}
           <div style={{ display:"flex", alignItems:"center", gap:12 }}>
             <div style={{
               width:40, height:40, borderRadius:12, flexShrink:0,
               display:"flex", alignItems:"center", justifyContent:"center",
-              background:`linear-gradient(135deg,${COL.from},${COL.to})`,
+              background:COL.from,
               boxShadow:`0 6px 18px ${COL.shadow}`,
             }}>
               <FaCalendarAlt style={{ width:17,height:17,color:"#fff" }} />
@@ -718,16 +698,14 @@ const TimetableInner = () => {
                 Emplois du temps
               </h1>
               <p style={{ fontSize:11, color:T.textMuted, marginTop:1 }}>
-                Sélectionnez jusqu'à 4 classes pour superposer leurs grilles
+                Sélectionnez jusqu'à {MAX_SELECTED} classes · la plus ancienne se désélectionne automatiquement
               </p>
             </div>
           </div>
 
-          {/* Actions */}
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
             <DarkToggle />
 
-            {/* Search */}
             <div style={{ position:"relative" }}>
               <FaSearch style={{
                 position:"absolute", left:10, top:"50%", transform:"translateY(-50%)",
@@ -764,8 +742,8 @@ const TimetableInner = () => {
                 display:"flex", alignItems:"center", gap:6, padding:"8px 12px", borderRadius:10,
                 border:"none", cursor:"pointer",
                 fontSize:12, fontWeight:700, color:"#fff",
-                background:"linear-gradient(135deg,#ef4444,#dc2626)",
-                boxShadow:"0 3px 10px #ef444444",
+                background:"#dc2626",
+                boxShadow:"0 3px 10px #dc262644",
               }}>
               <FaFilePdf style={{ width:11,height:11 }} />
               PDF
@@ -776,7 +754,7 @@ const TimetableInner = () => {
                 display:"flex", alignItems:"center", gap:6, padding:"8px 14px", borderRadius:10,
                 border:"none", cursor:"pointer",
                 fontSize:12, fontWeight:800, color:"#fff",
-                background:`linear-gradient(135deg,${COL.from},${COL.to})`,
+                background:COL.from,
                 boxShadow:`0 3px 12px ${COL.shadow}`,
               }}>
               <FaPlus style={{ width:11,height:11 }} />
@@ -795,36 +773,41 @@ const TimetableInner = () => {
           boxShadow:T.cardShadow,
         }}>
           <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-            <p style={{ fontSize:11, fontWeight:800, textTransform:"uppercase",
-              letterSpacing:"0.08em", color:T.textMuted, flexShrink:0 }}>
-              Classes
-            </p>
+            <div style={{ flexShrink:0 }}>
+              <p style={{ fontSize:11, fontWeight:800, textTransform:"uppercase",
+                letterSpacing:"0.08em", color:T.textMuted }}>
+                Classes
+              </p>
+              <p style={{ fontSize:9, color:T.textMuted, marginTop:2 }}>
+                max {MAX_SELECTED}
+              </p>
+            </div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:6, flex:1 }}>
               {loading && !classes.length
                 ? <p style={{ fontSize:12, color:T.textMuted, fontStyle:"italic" }}>Chargement…</p>
                 : classes.map((cls, idx) => {
                     const active = selectedCls.includes(cls.id);
-                    const [from, to] = CLASS_GRADIENTS[idx % CLASS_GRADIENTS.length];
+                    const color  = CLASS_COLORS[idx % CLASS_COLORS.length];
                     return (
                       <button key={cls.id} onClick={() => toggleClass(cls.id)}
                         style={{
                           display:"flex", alignItems:"center", gap:6,
-                          padding:"5px 12px", borderRadius:999, border:"none",
+                          padding:"5px 12px", borderRadius:999,
+                          border: active ? `2px solid ${color}` : `1.5px solid ${T.cardBorder}`,
                           cursor:"pointer", fontSize:11, fontWeight:700,
                           transition:"all .15s",
-                          background: active
-                            ? `linear-gradient(135deg,${from},${to})`
-                            : (dark ? "rgba(255,255,255,0.06)" : "#f1f5f9"),
+                          // Fond plat — aucun dégradé
+                          background: active ? color : (dark ? "rgba(255,255,255,0.06)" : "#f1f5f9"),
                           color: active ? "#fff" : T.textSecondary,
-                          boxShadow: active ? `0 3px 10px ${from}55` : "none",
+                          boxShadow: active ? `0 3px 10px ${color}55` : "none",
                           transform: active ? "translateY(-1px)" : "none",
                         }}>
                         {active && (
-                          <div style={{ width:6, height:6, borderRadius:"50%", background:"rgba(255,255,255,.7)" }} />
+                          <div style={{ width:6, height:6, borderRadius:"50%", background:"rgba(255,255,255,.8)" }} />
                         )}
                         {cls.name}
                         {cls.level?.name && (
-                          <span style={{ opacity:.7, fontWeight:500 }}>{cls.level.name}</span>
+                          <span style={{ opacity:.75, fontWeight:500 }}>{cls.level.name}</span>
                         )}
                       </button>
                     );
@@ -851,15 +834,17 @@ const TimetableInner = () => {
               <p style={{ fontSize:10, color:T.textMuted, fontWeight:600 }}>Affichées :</p>
               {selectedCls.map((id) => {
                 const cls = classes.find((c) => c.id === id);
-                const idx = classes.findIndex((c) => c.id === id);
-                const [from, to] = CLASS_GRADIENTS[idx % CLASS_GRADIENTS.length];
+                const color = classColor(id);
                 return cls ? (
                   <span key={id} style={{
                     display:"inline-flex", alignItems:"center", gap:5,
                     padding:"3px 10px", borderRadius:999, fontSize:10, fontWeight:700,
-                    background:`${from}18`, color:from, border:`1px solid ${from}44`,
+                    // Fond plat accentué — aucun dégradé
+                    background: dark ? `${color}35` : `${color}18`,
+                    color: color,
+                    border:`1.5px solid ${color}`,
                   }}>
-                    <div style={{ width:6,height:6,borderRadius:"50%",background:`linear-gradient(135deg,${from},${to})` }} />
+                    <div style={{ width:7,height:7,borderRadius:"50%",background:color }} />
                     {cls.name}
                   </span>
                 ) : null;
@@ -886,7 +871,7 @@ const TimetableInner = () => {
               <div style={{
                 width:68, height:68, borderRadius:20,
                 display:"flex", alignItems:"center", justifyContent:"center",
-                background:`linear-gradient(135deg,${COL.from}22,${COL.to}11)`,
+                background:`${COL.from}18`,
               }}>
                 <FaCalendarAlt style={{ width:28,height:28,color:COL.from,opacity:.6 }} />
               </div>
@@ -900,14 +885,14 @@ const TimetableInner = () => {
           ) : timeLabels.length === 0 ? (
             <div style={{ padding:"48px 24px", textAlign:"center" }}>
               <p style={{ fontSize:13, color:T.textMuted, fontStyle:"italic" }}>
-                Aucun créneau horaire défini. Ajoutez des créneaux depuis l'administration.
+                Aucun créneau horaire défini.
               </p>
             </div>
           ) : (
             <div style={{ overflowX:"auto" }} ref={pdfRef}>
               <div style={{ minWidth: gridMinW }}>
 
-                {/* ── En-tête jours ── */}
+                {/* En-tête jours */}
                 <div style={{
                   display:"grid", gridTemplateColumns: gridCols,
                   background:T.tableHead, borderBottom:`2px solid ${T.divider}`,
@@ -919,7 +904,6 @@ const TimetableInner = () => {
                     </p>
                   </div>
                   {WEEKDAYS.map((d) => {
-                    // Compter les cours ce jour
                     const count = displayedEntries.filter((e) => parseInt(e.weekday) === d.v).length;
                     return (
                       <div key={d.v} style={{
@@ -931,8 +915,8 @@ const TimetableInner = () => {
                         {count > 0 && (
                           <span style={{
                             fontSize:10, fontWeight:700, padding:"1px 6px", borderRadius:999,
-                            background: dark ? COL.darkBg : COL.lightBg,
-                            color:COL.text, border:`1px solid ${COL.from}44`,
+                            background: COL.from + "18",
+                            color:COL.from, border:`1px solid ${COL.from}44`,
                           }}>
                             {count}
                           </span>
@@ -942,7 +926,7 @@ const TimetableInner = () => {
                   })}
                 </div>
 
-                {/* ── Lignes horaires ── */}
+                {/* Lignes horaires */}
                 {timeLabels.map((tl, idx) => {
                   const isEven = idx % 2 === 0;
                   return (
@@ -1002,15 +986,15 @@ const TimetableInner = () => {
               Légende
             </p>
             {legendClasses.map((cls) => {
-              const idx = classes.findIndex((c) => c.id === cls.id);
-              const [from, to] = CLASS_GRADIENTS[idx % CLASS_GRADIENTS.length];
+              const color = classColor(cls.id);
               const count = displayedEntries.filter((e) => e.school_class === cls.id).length;
               return (
                 <div key={cls.id} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                  {/* Carré plat — aucun dégradé */}
                   <div style={{
                     width:14, height:14, borderRadius:4, flexShrink:0,
-                    background:`linear-gradient(135deg,${from},${to})`,
-                    boxShadow:`0 2px 6px ${from}44`,
+                    background: color,
+                    boxShadow:`0 2px 6px ${color}55`,
                   }} />
                   <span style={{ fontSize:12, fontWeight:700, color:T.textPrimary }}>{cls.name}</span>
                   <span style={{ fontSize:10, color:T.textMuted }}>
@@ -1049,9 +1033,6 @@ const TimetableInner = () => {
   );
 };
 
-/* ──────────────────────────────────────────────────────────────────
-   ROOT (avec ThemeCtx.Provider)
-────────────────────────────────────────────────────────────────── */
 const Timetable = () => {
   const [dark, setDark] = useState(() => {
     try { return localStorage.getItem("scol360_dark") === "true"; } catch { return false; }
