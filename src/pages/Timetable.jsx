@@ -450,6 +450,10 @@ const TimetableInner = () => {
   const [searchText,   setSearchText]   = useState("");
   const [msg,          setMsg]          = useState(null);
 
+  // ── Années scolaires ─────────────────────────────────────────────────────
+  const [allYears,     setAllYears]     = useState([]);
+  const [selectedYear, setSelectedYear] = useState(null); // null = active par défaut
+
   const fetchingRef = useRef(new Set());
   const cachedRef   = useRef(new Set());
   const pdfRef      = useRef(null);
@@ -463,11 +467,12 @@ const TimetableInner = () => {
   const fetchInitial = useCallback(async () => {
     setLoading(true);
     try {
-      const [cls, sub, tea, slots] = await Promise.all([
+      const [cls, sub, tea, slots, yrData] = await Promise.all([
         fetchData("/academics/school-classes/").catch(() => []),
         fetchData("/academics/subjects/").catch(() => []),
         fetchData("/core/admin/teachers/?no_pagination=1").catch(() => []),
         fetchData("/academics/time-slots/").catch(() => []),
+        fetchData("/academics/school-years/").catch(() => []),
       ]);
       setClasses(Array.isArray(cls) ? cls : (cls?.results ?? []));
       setSubjects(Array.isArray(sub) ? sub : (sub?.results ?? []));
@@ -476,6 +481,13 @@ const TimetableInner = () => {
         .slice()
         .sort((a, b) => (a.day - b.day) || timeToMin(a.start_time) - timeToMin(b.start_time));
       setTimeSlots(sorted);
+
+      const yrArr = (Array.isArray(yrData) ? yrData : (yrData?.results ?? []))
+        .sort((a, b) => b.label.localeCompare(a.label));
+      setAllYears(yrArr);
+      // Pré-sélectionner l'année active
+      const active = yrArr.find(y => y.is_active && !y.is_closed) ?? yrArr[0] ?? null;
+      setSelectedYear(active);
     } catch { setMsg({ type:"error", text:"Erreur de chargement initial." }); }
     finally { setLoading(false); }
   }, []);
@@ -488,13 +500,21 @@ const TimetableInner = () => {
     if (!force && cachedRef.current.has(classId)) return;
     fetchingRef.current.add(classId);
     try {
-      const data = await fetchData(`/academics/timetable/?school_class=${classId}`);
+      const yearParam = selectedYear ? `&school_year=${selectedYear.id}` : "";
+      const data = await fetchData(`/academics/timetable/?school_class=${classId}${yearParam}`);
       const entries = Array.isArray(data) ? data : (data?.results ?? []);
       setEntriesMap((prev) => ({ ...prev, [classId]: entries }));
       cachedRef.current.add(classId);
     } catch { setMsg({ type:"error", text:"Erreur de chargement de l'emploi du temps." }); }
     finally { fetchingRef.current.delete(classId); }
-  }, []);
+  }, [selectedYear]);
+
+  // Vider le cache et recharger quand l'année change
+  useEffect(() => {
+    cachedRef.current.clear();
+    setEntriesMap({});
+    selectedCls.forEach(id => fetchClassEntries(id, true));
+  }, [selectedYear]); // eslint-disable-line
 
   const refreshSelected = useCallback(async () => {
     const ids = [...selectedCls];
@@ -704,6 +724,40 @@ const TimetableInner = () => {
           </div>
 
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+
+            {/* Sélecteur d'année scolaire */}
+            {allYears.length > 0 && (
+              <div style={{ position:"relative" }}>
+                <select
+                  value={selectedYear?.id ?? ""}
+                  onChange={(e) => {
+                    const yr = allYears.find(y => String(y.id) === e.target.value) ?? null;
+                    setSelectedYear(yr);
+                    // reset sélection de classes pour forcer rechargement
+                    setSelectedCls([]);
+                    setEntriesMap({});
+                    cachedRef.current.clear();
+                  }}
+                  style={{
+                    appearance:"none", paddingLeft:10, paddingRight:24,
+                    paddingTop:6, paddingBottom:6, fontSize:11, fontWeight:700,
+                    borderRadius:10, outline:"none", cursor:"pointer",
+                    background: selectedYear?.is_closed
+                      ? (dark ? "#f59e0b18" : "#fef9c3")
+                      : `${COL.from}18`,
+                    color: selectedYear?.is_closed ? "#b45309" : COL.from,
+                    border:`1.5px solid ${selectedYear?.is_closed ? "#f59e0b44" : `${COL.from}44`}`,
+                    minWidth:120,
+                  }}>
+                  {allYears.map(yr => (
+                    <option key={yr.id} value={yr.id}>
+                      {yr.label}{yr.is_active && !yr.is_closed ? " ✦" : yr.is_closed ? " ⊘" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <DarkToggle />
 
             <div style={{ position:"relative" }}>

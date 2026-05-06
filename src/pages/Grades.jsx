@@ -516,15 +516,24 @@ const GradesInner = () => {
 
   /* ── Fetch notes ── */
   const fetchGrades = useCallback(async (overrideFilters) => {
+    const f = overrideFilters ?? filters;
+
+    // ── Garde obligatoire : on exige au moins une classe ET un trimestre ─────
+    // Sans ce garde, on chargerait toutes les notes de toutes les années
+    // (potentiellement des dizaines de milliers) → freeze du navigateur.
+    if (!f.school_class || !f.term) {
+      setGrades([]);
+      return;
+    }
+
     setLoadingGrades(true);
     try {
-      const f = overrideFilters ?? filters;
       const q = buildQuery({
-        school_class: f.school_class || undefined,
-        student_id:   f.student      || undefined,
-        subject:      f.subject      || undefined,
-        term:         f.term         || undefined,
-        student_name: search.trim()  || undefined,
+        school_class:  f.school_class || undefined,
+        student_id:    f.student      || undefined,
+        subject:       f.subject      || undefined,
+        term:          f.term         || undefined,
+        student_name:  search.trim()  || undefined,
       });
       const data = await fetchData(`/academics/grades/${q}`);
       setGrades(Array.isArray(data) ? data : (data?.results ?? []));
@@ -533,12 +542,22 @@ const GradesInner = () => {
         fetchTermStatus(filters.school_class, filters.term);
         setMsg({ type:"error", text:"Ce trimestre est verrouillé." });
       } else {
-        setMsg({ type:"error", text:"Erreur lors de la récupération des notes." });
+        // Extraction du message d'erreur réel depuis err.body (fetch custom)
+        const body   = err?.body;
+        const detail = typeof body === "string"
+          ? body
+          : body?.detail
+            || body?.non_field_errors?.[0]
+            || (body ? JSON.stringify(body) : null)
+            || "Erreur lors de la récupération des notes.";
+        setMsg({ type:"error", text: detail });
       }
     } finally { setLoadingGrades(false); }
   }, [filters, search, fetchTermStatus]);
 
-  useEffect(() => { fetchGrades(); }, []); // eslint-disable-line
+  // Recharger les notes dès que la classe OU le trimestre change
+  // (les deux sont requis par fetchGrades — la garde interne protège)
+  useEffect(() => { fetchGrades(); }, [filters.school_class, filters.term]); // eslint-disable-line
 
   useEffect(() => {
     if (filters.student) setForm((p) => ({ ...p, student_id: filters.student }));
@@ -573,8 +592,15 @@ const GradesInner = () => {
         fetchTermStatus(filters.school_class, filters.term);
         setMsg({ type:"error", text:"Ce trimestre est verrouillé — opération refusée." });
       } else {
-        const detail = err?.response?.data?.detail;
-        setMsg({ type:"error", text: detail || "Erreur lors de l'enregistrement." });
+        // err.body contient le corps JSON retourné par le backend (fetch custom)
+        const body   = err?.body;
+        const detail = typeof body === "string"
+          ? body
+          : body?.detail
+            || body?.non_field_errors?.[0]
+            || (body ? Object.entries(body).map(([k,v]) => `${k}: ${Array.isArray(v)?v.join(", "):v}`).join(" | ") : null)
+            || "Erreur lors de l'enregistrement.";
+        setMsg({ type:"error", text: detail });
       }
     } finally { setSaving(false); }
   };
@@ -992,7 +1018,27 @@ const GradesInner = () => {
 
           {/* RÉSULTATS */}
           <div>
-            {loadingGrades ? (
+            {!filters.school_class || !filters.term ? (
+              <div style={{
+                borderRadius:16, padding:"60px 24px", textAlign:"center",
+                background:T.cardBg, border:`2px dashed ${COL.from}44`,
+                animation:"fadeUp .3s ease-out",
+              }}>
+                <div style={{
+                  width:64, height:64, borderRadius:20, margin:"0 auto 16px",
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  background:`linear-gradient(135deg,${COL.from}22,${COL.to}11)`,
+                }}>
+                  <FaBookOpen style={{ width:26,height:26,color:COL.from,opacity:.5 }} />
+                </div>
+                <p style={{ fontSize:16, fontWeight:800, color:T.textSecondary }}>
+                  Sélectionnez une classe et un trimestre
+                </p>
+                <p style={{ fontSize:12, color:T.textMuted, marginTop:6 }}>
+                  Les notes s'afficheront ici après avoir choisi une classe et un trimestre dans les filtres.
+                </p>
+              </div>
+            ) : loadingGrades ? (
               <div style={{ display:"grid", gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr", gap:12 }}>
                 {[...Array(4)].map((_, i) => (
                   <div key={i} style={{

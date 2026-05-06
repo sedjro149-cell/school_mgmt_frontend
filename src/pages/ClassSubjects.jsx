@@ -11,7 +11,7 @@ import {
   FaExclamationTriangle, FaMoon, FaSun,
   FaGraduationCap, FaBookOpen,
 } from "react-icons/fa";
-import { fetchData, postData, putData, deleteData } from "./api";
+import { fetchData, postData, putData, patchData, deleteData } from "./api";
 import {
   ThemeCtx, useTheme,
   LIGHT, DARK,
@@ -346,7 +346,11 @@ const CopyConfigModal = ({ sourceClass, schoolClasses, onClose, onSuccess, setMs
         overwrite,
       });
       setResult(res);
-    } catch { setMsg({ type:"error", text:"Erreur lors de la copie." }); }
+    } catch (err) {
+      // Affiche le message d'erreur renvoyé par le serveur si disponible
+      const detail = err?.body?.detail || err?.body?.message || err?.message || "Erreur lors de la copie.";
+      setMsg({ type:"error", text: detail });
+    }
     finally { setLoading(false); }
   };
 
@@ -849,16 +853,25 @@ const SubjectsAndClassSubjectsInner = () => {
     const toCreate = [], toUpdate = [], toDelete = [];
 
     Object.values(formData).forEach((d) => {
-      const payload = {
+      // Payload complet pour la création (school_class_id + subject_id obligatoires)
+      const createPayload = {
         school_class_id: parseInt(selectedClass, 10),
         subject_id:      parseInt(d.subject_id,  10),
         coefficient:     Number(d.coefficient)    || 1,
         hours_per_week:  Number(d.hours_per_week) || 1,
         is_optional:     Boolean(d.is_optional),
       };
-      if (d.isActive && !d.id)            toCreate.push(payload);          // ← nouveau
-      else if (d.isActive && d.id && d.changed) toUpdate.push({ id:d.id, payload }); // ← modifié
-      else if (!d.isActive && d.id)       toDelete.push(d.id);             // ← désactivé
+      // Payload minimal pour PATCH : on n'envoie PAS school_class_id/subject_id
+      // pour éviter le déclenchement du validateur unique_together sur les champs
+      // qui n'ont pas changé.
+      const patchPayload = {
+        coefficient:    Number(d.coefficient)    || 1,
+        hours_per_week: Number(d.hours_per_week) || 1,
+        is_optional:    Boolean(d.is_optional),
+      };
+      if (d.isActive && !d.id)                  toCreate.push(createPayload);
+      else if (d.isActive && d.id && d.changed) toUpdate.push({ id: d.id, payload: patchPayload });
+      else if (!d.isActive && d.id)             toDelete.push(d.id);
     });
 
     if (!toCreate.length && !toUpdate.length && !toDelete.length) {
@@ -868,7 +881,8 @@ const SubjectsAndClassSubjectsInner = () => {
     try {
       await Promise.all([
         ...toCreate.map((p)  => postData("/academics/class-subjects/", p)),
-        ...toUpdate.map((u)  => putData(`/academics/class-subjects/${u.id}/`, u.payload)),
+        // PATCH et non PUT : mise à jour partielle, évite les conflits unique_together
+        ...toUpdate.map((u)  => patchData(`/academics/class-subjects/${u.id}/`, u.payload)),
         ...toDelete.map((id) => deleteData(`/academics/class-subjects/${id}/`)),
       ]);
       const parts = [];

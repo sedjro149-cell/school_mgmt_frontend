@@ -188,6 +188,33 @@ const StudentsInner = () => {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filterClassId,   setFilterClassId]   = useState("");
 
+  // ── Vue figée par année ───────────────────────────────────────────────────
+  // allYears      : toutes les années scolaires pour le sélecteur
+  // selectedYear  : null = vue live (toutes les années)
+  // frozenRoster  : données figées de l'année clôturée sélectionnée
+  // frozenClass   : classe sélectionnée dans la vue figée
+  const [allYears,     setAllYears]     = useState([]);
+  const [selectedYear, setSelectedYear] = useState(null);
+  const [frozenRoster, setFrozenRoster] = useState(null);
+  const [frozenClass,  setFrozenClass]  = useState("");
+  const [loadingRoster, setLoadingRoster] = useState(false);
+
+  const isFrozenView = selectedYear !== null && selectedYear.is_closed;
+
+  // Classes disponibles dans la vue figée
+  const frozenClasses  = frozenRoster?.classes ?? [];
+  // Élèves de la classe sélectionnée dans la vue figée (filtre local, 0 appel API)
+  const frozenStudents = frozenClass
+    ? (frozenClasses.find(c => String(c.id) === String(frozenClass))?.students ?? [])
+    : frozenClasses.flatMap(c => c.students ?? []);
+  // Application du filtre texte côté client sur la vue figée
+  const frozenFiltered = frozenStudents.filter(s => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (s.lastname  + " " + s.firstname).toLowerCase().includes(q)
+        || (s.firstname + " " + s.lastname).toLowerCase().includes(q);
+  });
+
   /* ── Form ── */
   const [currentStudent, setCurrentStudent] = useState(null);
   const [studentForm,    setStudentForm]    = useState({
@@ -197,19 +224,39 @@ const StudentsInner = () => {
 
   const latestReqId = useRef(0);
 
-  /* ── Dropdowns ── */
+  /* ── Dropdowns + années ── */
   useEffect(() => {
     const load = async () => {
       try {
-        const [clsData, parData] = await Promise.all([
+        const [clsData, parData, yrData] = await Promise.all([
           fetchData("/academics/school-classes/?page_size=100"),
           fetchData("/core/admin/parents/?page_size=100"),
+          fetchData("/academics/school-years/").catch(() => []),
         ]);
         setClassesList(clsData?.results ?? clsData ?? []);
         setParentsList(parData?.results  ?? parData  ?? []);
+        const yrArr = (Array.isArray(yrData) ? yrData : yrData?.results ?? [])
+          .sort((a, b) => b.label.localeCompare(a.label));
+        setAllYears(yrArr);
       } catch (err) { console.error("Erreur dropdowns:", err); }
     };
     load();
+  }, []);
+
+  /* ── Chargement du roster figé ── */
+  const fetchFrozenRoster = useCallback(async (yearId) => {
+    if (!yearId) { setFrozenRoster(null); return; }
+    setLoadingRoster(true);
+    try {
+      const data = await fetchData(`/academics/school-years/${yearId}/roster/`);
+      setFrozenRoster(data);
+      setFrozenClass("");
+    } catch (err) {
+      console.error("Erreur roster:", err);
+      setFrozenRoster(null);
+    } finally {
+      setLoadingRoster(false);
+    }
   }, []);
 
   /* ── Debounce ── */
@@ -380,26 +427,61 @@ const StudentsInner = () => {
 
           {/* Filtres */}
           <div className="mt-4 flex gap-3 flex-wrap">
+            {/* Sélecteur d'année scolaire */}
+            <div className="relative" style={{ minWidth:160 }}>
+              <select
+                value={selectedYear?.id ?? ""}
+                onChange={(e) => {
+                  const yr = allYears.find(y => String(y.id) === e.target.value) ?? null;
+                  setSelectedYear(yr);
+                  setFrozenClass(""); setFrozenRoster(null);
+                  if (yr?.is_closed) fetchFrozenRoster(yr.id);
+                }}
+                className="w-full appearance-none pl-4 pr-9 py-2.5 text-sm rounded-xl outline-none transition-all"
+                style={{
+                  background: T.inputBg, border:`1.5px solid ${T.inputBorder}`,
+                  color: selectedYear ? T.textPrimary : T.textMuted,
+                }}
+                onFocus={(e) => (e.currentTarget.style.borderColor=COL.from)}
+                onBlur={(e)  => (e.currentTarget.style.borderColor=T.inputBorder)}>
+                <option value="">Année en cours</option>
+                {allYears.map(y => (
+                  <option key={y.id} value={y.id}>
+                    {y.label}{y.is_active && !y.is_closed ? " ✦" : y.is_closed ? " (clôturée)" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Recherche — visible en live et en figé */}
             <div className="relative flex-1" style={{ minWidth:200 }}>
               <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
                 style={{ width:13,height:13,color:T.textMuted }} />
               <input value={search} onChange={(e) => setSearch(e.target.value)}
-                placeholder="Rechercher (Nom, ID, Email…)"
+                placeholder={isFrozenView ? "Rechercher (Nom…)" : "Rechercher (Nom, ID, Email…)"}
                 className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl outline-none transition-all placeholder:opacity-50"
                 style={{ background:T.inputBg, border:`1.5px solid ${T.inputBorder}`, color:T.textPrimary }}
                 onFocus={(e) => (e.currentTarget.style.borderColor=COL.from)}
                 onBlur={(e)  => (e.currentTarget.style.borderColor=T.inputBorder)} />
             </div>
+
+            {/* Filtre classe — live: toutes les classes / figé: classes de l'année */}
             <div className="relative" style={{ minWidth:180 }}>
-              <select value={filterClassId}
-                onChange={(e) => { setFilterClassId(e.target.value); setCurrentPage(1); }}
+              <select
+                value={isFrozenView ? frozenClass : filterClassId}
+                onChange={(e) => {
+                  if (isFrozenView) setFrozenClass(e.target.value);
+                  else { setFilterClassId(e.target.value); setCurrentPage(1); }
+                }}
                 className="w-full appearance-none pl-4 pr-9 py-2.5 text-sm rounded-xl outline-none transition-all"
                 style={{ background:T.inputBg, border:`1.5px solid ${T.inputBorder}`,
-                  color:filterClassId?T.textPrimary:T.textMuted }}
+                  color:(isFrozenView?frozenClass:filterClassId)?T.textPrimary:T.textMuted }}
                 onFocus={(e) => (e.currentTarget.style.borderColor=COL.from)}
                 onBlur={(e)  => (e.currentTarget.style.borderColor=T.inputBorder)}>
                 <option value="">Toutes les classes</option>
-                {classesList.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {(isFrozenView ? frozenClasses : classesList).map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
               </select>
               <FaFilter className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
                 style={{ width:11,height:11,color:T.textMuted }} />
@@ -411,6 +493,119 @@ const StudentsInner = () => {
       {/* ── Main ── */}
       <main className="max-w-7xl mx-auto px-6 py-6">
 
+        {/* ── VUE FIGÉE (année clôturée sélectionnée) ── */}
+        {isFrozenView && (
+          <div style={{ marginBottom:28 }}>
+
+            {/* Bannière d'avertissement */}
+            <div style={{
+              display:"flex", alignItems:"center", gap:10, padding:"10px 18px",
+              borderRadius:12, marginBottom:20,
+              background: "linear-gradient(135deg,#f59e0b18,#fef9c318)",
+              border:"1.5px solid #f59e0b44",
+            }}>
+              <span style={{ fontSize:16 }}>📂</span>
+              <div>
+                <p style={{ fontSize:12, fontWeight:700, color:"#b45309", margin:0 }}>
+                  Vue archivée — Année {selectedYear.label} (clôturée)
+                </p>
+                <p style={{ fontSize:11, color:"#92400e", margin:0 }}>
+                  Liste figée au moment de la clôture. Toute modification est impossible.
+                </p>
+              </div>
+            </div>
+
+            {loadingRoster ? (
+              <div style={{ textAlign:"center", padding:40, color:T.textMuted, fontSize:13 }}>
+                Chargement du roster archivé…
+              </div>
+            ) : frozenRoster ? (
+              <div style={{
+                background:T.cardBg, borderRadius:18,
+                border:`1px solid ${T.cardBorder}`, boxShadow:T.cardShadow,
+                overflow:"hidden",
+              }}>
+                {/* Résumé par classes */}
+                {!frozenClass && (
+                  <div style={{
+                    display:"flex", flexWrap:"wrap", gap:10, padding:"16px 20px",
+                    borderBottom:`1px solid ${T.divider}`,
+                  }}>
+                    {frozenClasses.map(c => (
+                      <button key={c.id}
+                        onClick={() => setFrozenClass(String(c.id))}
+                        style={{
+                          padding:"6px 14px", borderRadius:20, fontSize:12, fontWeight:600,
+                          cursor:"pointer", border:`1.5px solid ${T.inputBorder}`,
+                          background:T.inputBg, color:T.textPrimary,
+                        }}>
+                        {c.name} <span style={{ color:T.textMuted }}>({c.student_count})</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                  <thead>
+                    <tr style={{ background:T.tableHead }}>
+                      {["Élève", "Classe"].map(h => (
+                        <th key={h} style={{
+                          textAlign:"left", padding:"11px 16px", fontSize:10,
+                          fontWeight:700, color:T.textSecondary,
+                          borderBottom:`1px solid ${T.divider}`, letterSpacing:".04em",
+                        }}>{h.toUpperCase()}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {frozenFiltered.length === 0 ? (
+                      <tr><td colSpan={2} style={{ padding:32, textAlign:"center", color:T.textMuted, fontSize:13 }}>
+                        Aucun élève trouvé.
+                      </td></tr>
+                    ) : frozenFiltered.map(s => {
+                      const cls = frozenClasses.find(c =>
+                        c.students?.some(st => st.id === s.id)
+                      );
+                      return (
+                        <tr key={s.id}
+                          style={{ borderBottom:`1px solid ${T.divider}` }}
+                          onMouseEnter={e => e.currentTarget.style.background=T.rowHover}
+                          onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+                          <td style={{ padding:"11px 16px", fontSize:13, fontWeight:600, color:T.textPrimary }}>
+                            {s.lastname} {s.firstname}
+                          </td>
+                          <td style={{ padding:"11px 16px", fontSize:12, color:T.textSecondary }}>
+                            {cls?.name ?? "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+
+                {frozenClass && (
+                  <div style={{ padding:"12px 20px", borderTop:`1px solid ${T.divider}` }}>
+                    <button onClick={() => setFrozenClass("")}
+                      style={{
+                        fontSize:12, color:COL.from, background:"none",
+                        border:"none", cursor:"pointer", fontWeight:600,
+                      }}>
+                      ← Toutes les classes
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ textAlign:"center", padding:40, color:T.textMuted, fontSize:13 }}>
+                Aucune donnée archivée pour cette année.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── VUE LIVE (année active ou aucune année sélectionnée) ── */}
+        {!isFrozenView && (
+        <>
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4 mb-6">
           {stats.map((s, i) => (
@@ -503,6 +698,8 @@ const StudentsInner = () => {
             </div>
           </div>
         </div>
+        </> /* fin !isFrozenView */
+        )}
       </main>
 
       {/* ── Modal Étudiant ── */}

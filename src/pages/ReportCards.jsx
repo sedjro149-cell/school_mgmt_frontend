@@ -320,82 +320,111 @@ const ReportCardsInner = () => {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
 
-  const [classes,         setClasses]         = useState([]);
   const [loadingClasses,  setLoadingClasses]  = useState(true);
   const [classId,         setClassId]         = useState("");
-  const [students,        setStudents]        = useState([]);
-  const [loadingStudents, setLoadingStudents] = useState(false);
+  const [loadingStudents] = useState(false);   // plus d'appel async pour les élèves
   const [studentId,       setStudentId]       = useState("");
   const [term,            setTerm]            = useState("T1");
   const [reportCard,      setReportCard]      = useState(null);
   const [loadingReport,   setLoadingReport]   = useState(false);
   const [msg,             setMsg]             = useState(null);
   const [termStatus,      setTermStatus]      = useState(null);
-  const [activeYear,      setActiveYear]      = useState(null);
-  const [nbTerms,         setNbTerms]         = useState(3);
+
+  // ── Années scolaires ───────────────────────────────────────────────────────
+  // allYears   : toutes les années triées desc (pour le sélecteur)
+  // selectedYear : l'année consultée (active par défaut, sinon la plus récente)
+  const [allYears,      setAllYears]      = useState([]);
+  const [selectedYear,  setSelectedYear]  = useState(null);   // objet SchoolYear ou null
+  const [loadingYears,  setLoadingYears]  = useState(true);
+
+  // Raccourcis dérivés de selectedYear
+  const activeYear = allYears.find(y => y.is_active && !y.is_closed) ?? null;
+  const nbTerms    = selectedYear?.nb_terms ?? 3;
+  const yearIsClosed = selectedYear ? selectedYear.is_closed : false;
 
   const printableRef = useRef(null);
 
   /* ── fetchTermStatus ── */
-  const fetchTermStatus = useCallback(async (cls, t) => {
+  const fetchTermStatus = useCallback(async (cls, t, yearId) => {
     if (!cls || !t) { setTermStatus(null); return; }
+    // Pour une année clôturée le TermStatus existe toujours en base
+    // mais n'est utile qu'à titre informatif (readonly). On le charge quand même.
     try {
-      const data = await fetchData(`/academics/term-status/?school_class=${cls}&term=${t}`);
+      const params = new URLSearchParams({ school_class: cls, term: t });
+      if (yearId) params.append("school_year", yearId);
+      const data = await fetchData(`/academics/term-status/?${params}`);
       const list = Array.isArray(data) ? data : (data?.results ?? []);
       setTermStatus(list.length ? list[0] : null);
     } catch { setTermStatus(null); }
   }, []);
 
   useEffect(() => {
-    fetchTermStatus(classId, term);
-  }, [classId, term, fetchTermStatus]);
+    fetchTermStatus(classId, term, selectedYear?.id);
+  }, [classId, term, selectedYear, fetchTermStatus]);
 
-  /* ── Fetch classes + année active ── */
-  const fetchClasses = useCallback(async () => {
+  // ── Roster figé par année (classes + élèves) ─────────────────────────────
+  // roster = { classes: [{id, name, level_name, students:[{id,firstname,lastname}]}] }
+  const [roster, setRoster] = useState(null);
+
+  // Classes dérivées du roster
+  const classes   = roster?.classes ?? [];
+  // Élèves de la classe sélectionnée, dérivés du roster (filtre local, 0 appel API)
+  const students  = classId
+    ? (roster?.classes?.find(c => String(c.id) === String(classId))?.students ?? [])
+    : [];
+
+  /* ── fetchRoster : chargé à chaque changement d'année ── */
+  const fetchRoster = useCallback(async (yearId) => {
+    if (!yearId) {
+      setRoster(null);
+      setAllYears([]);
+      setLoadingClasses(false);
+      setLoadingYears(false);
+      return;
+    }
     setLoadingClasses(true);
     try {
-      const [clsData, yrData] = await Promise.all([
-        fetchData("/academics/school-classes/"),
-        fetchData("/academics/school-years/").catch(() => []),
-      ]);
-      setClasses(Array.isArray(clsData) ? clsData : []);
-      const yrArr = Array.isArray(yrData) ? yrData : yrData?.results ?? [];
-      const active = yrArr.find(y => y.is_active && !y.is_closed) ?? null;
-      setActiveYear(active);
-      if (active?.nb_terms) setNbTerms(active.nb_terms);
+      const data = await fetchData(`/academics/school-years/${yearId}/roster/`);
+      setRoster(data);
     } catch (err) {
       handleApiError(err);
-      setMsg({ type:"error", text:"Impossible de charger les classes." });
-    } finally { setLoadingClasses(false); }
+      setMsg({ type: "error", text: "Impossible de charger les classes de cette année." });
+      setRoster(null);
+    } finally {
+      setLoadingClasses(false);
+    }
   }, []);
 
-  useEffect(() => { fetchClasses(); }, [fetchClasses]);
-
-  /* ── Fetch élèves ── */
-  const fetchStudents = useCallback(async (cid) => {
-    if (!cid) { setStudents([]); return; }
-    setLoadingStudents(true); setStudents([]);
+  /* ── Chargement initial : toutes les années + roster de l'année par défaut ── */
+  const fetchAllYears = useCallback(async () => {
+    setLoadingYears(true);
     try {
-      const data = await fetchData(`/core/admin/students/by-class/${cid}/`);
-      setStudents(Array.isArray(data) ? data : []);
+      const yrData = await fetchData("/academics/school-years/").catch(() => []);
+      const yrArr  = (Array.isArray(yrData) ? yrData : yrData?.results ?? [])
+        .sort((a, b) => b.label.localeCompare(a.label));
+      setAllYears(yrArr);
+
+      const active   = yrArr.find(y => y.is_active && !y.is_closed) ?? null;
+      const default_ = active ?? yrArr[0] ?? null;
+      setSelectedYear(default_);
+      if (default_) await fetchRoster(default_.id);
     } catch (err) {
       handleApiError(err);
-      setMsg({ type:"error", text:"Impossible de charger les élèves." });
-    } finally { setLoadingStudents(false); }
-  }, []);
+      setMsg({ type: "error", text: "Impossible de charger les années scolaires." });
+    } finally {
+      setLoadingYears(false);
+    }
+  }, [fetchRoster]);
 
-  useEffect(() => {
-    setStudentId(""); setReportCard(null);
-    if (classId) fetchStudents(classId);
-    else setStudents([]);
-  }, [classId, fetchStudents]);
+  useEffect(() => { fetchAllYears(); }, [fetchAllYears]);
 
   /* ── Fetch bulletin ── */
-  const fetchReportCard = useCallback(async (sid, t) => {
+  const fetchReportCard = useCallback(async (sid, t, yearId) => {
     if (!sid) return;
     setLoadingReport(true); setReportCard(null);
     try {
-      const data = await fetchData(`/academics/report-cards/${buildQuery({ student_id: sid, term: t })}`);
+      const q = buildQuery({ student_id: sid, term: t, school_year: yearId || undefined });
+      const data = await fetchData(`/academics/report-cards/${q}`);
       const arr = Array.isArray(data) ? data : [];
       setReportCard(arr.length ? arr[0] : null);
       if (!arr.length) setMsg({ type:"info", text:"Aucun bulletin trouvé pour cet élève / trimestre." });
@@ -410,9 +439,9 @@ const ReportCardsInner = () => {
   }, []);
 
   useEffect(() => {
-    if (studentId) fetchReportCard(studentId, term);
+    if (studentId) fetchReportCard(studentId, term, selectedYear?.id);
     else setReportCard(null);
-  }, [studentId, term, fetchReportCard]);
+  }, [studentId, term, selectedYear, fetchReportCard]);
 
   const chartData = useMemo(() =>
     (reportCard?.subjects ?? []).map((s) => ({
@@ -493,19 +522,56 @@ const ReportCardsInner = () => {
                 Bulletins Scolaires
               </h1>
               <p style={{ fontSize:11, color:T.textMuted, marginTop:1 }}>
-                Consultation et export des bulletins par trimestre
-                {activeYear && (
-                  <span style={{
-                    marginLeft:8, padding:"1px 8px", borderRadius:999, fontSize:9,
-                    fontWeight:800, background:`${COL.from}18`, color:COL.from,
-                  }}>
-                    {activeYear.label} · {nbTerms} trimestre{nbTerms > 1 ? "s" : ""}
-                  </span>
-                )}
+                Consultation et export des bulletins par année et trimestre
               </p>
             </div>
           </div>
-          <DarkToggle />
+
+          {/* Sélecteur d'année scolaire */}
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            {loadingYears ? (
+              <span style={{ fontSize:11, color:T.textMuted }}>Chargement…</span>
+            ) : (
+              <div style={{ position:"relative" }}>
+                <select
+                  value={selectedYear?.id ?? ""}
+                  onChange={(e) => {
+                    const yr = allYears.find(y => String(y.id) === e.target.value) ?? null;
+                    setSelectedYear(yr);
+                    // Reset sélections enfants lors du changement d'année
+                    setClassId(""); setStudentId(""); setReportCard(null); setRoster(null);
+                    if (yr) fetchRoster(yr.id);
+                  }}
+                  style={{
+                    appearance:"none", paddingLeft:12, paddingRight:28,
+                    paddingTop:7, paddingBottom:7, fontSize:12, fontWeight:700,
+                    borderRadius:10, outline:"none", cursor:"pointer",
+                    background: yearIsClosed
+                      ? (dark ? "#f59e0b18" : "#fef9c3")
+                      : `${COL.from}18`,
+                    color: yearIsClosed ? "#b45309" : COL.from,
+                    border:`1.5px solid ${yearIsClosed ? "#f59e0b44" : `${COL.from}44`}`,
+                    minWidth:130,
+                  }}
+                >
+                  {allYears.length === 0 && (
+                    <option value="">Aucune année</option>
+                  )}
+                  {allYears.map(yr => (
+                    <option key={yr.id} value={yr.id}>
+                      {yr.label}{yr.is_active && !yr.is_closed ? " ✦" : yr.is_closed ? " (clôturée)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <FaChevronDown style={{
+                  position:"absolute", right:9, top:"50%", transform:"translateY(-50%)",
+                  width:8, height:8, pointerEvents:"none",
+                  color: yearIsClosed ? "#b45309" : COL.from,
+                }} />
+              </div>
+            )}
+            <DarkToggle />
+          </div>
         </div>
       </header>
 
@@ -519,7 +585,7 @@ const ReportCardsInner = () => {
         }}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 180px auto", gap:12, alignItems:"end" }}>
             <Sel label="Classe" icon={FaLayerGroup}
-              value={classId} onChange={(e) => setClassId(e.target.value)}
+              value={classId} onChange={(e) => { setClassId(e.target.value); setStudentId(""); setReportCard(null); }}
               disabled={loadingClasses}>
               <option value="">{loadingClasses ? "Chargement…" : "— Choisir une classe —"}</option>
               {classes.map((c) => (
@@ -529,16 +595,14 @@ const ReportCardsInner = () => {
 
             <Sel label={`Élève${loadingStudents ? " …" : ""}`} icon={FaUserGraduate}
               value={studentId} onChange={(e) => setStudentId(e.target.value)}
-              disabled={!classId || loadingStudents}>
+              disabled={!classId}>
               <option value="">
                 {!classId ? "Sélectionner une classe" :
-                  loadingStudents ? "Chargement…" :
                   students.length === 0 ? "Aucun élève" : "— Choisir un élève —"}
               </option>
               {students.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {studentFullName(s)}
-                  {(s.user?.username || s.username) ? ` · ${s.user?.username || s.username}` : ""}
+                  {s.lastname} {s.firstname}
                 </option>
               ))}
             </Sel>
@@ -567,7 +631,7 @@ const ReportCardsInner = () => {
 
             <div style={{ display:"flex", gap:8, flexDirection:"column" }}>
               <button
-                onClick={() => studentId ? fetchReportCard(studentId, term) : setMsg({ type:"error", text:"Choisissez d'abord un élève." })}
+                onClick={() => studentId ? fetchReportCard(studentId, term, selectedYear?.id) : setMsg({ type:"error", text:"Choisissez d'abord un élève." })}
                 style={{
                   display:"flex", alignItems:"center", justifyContent:"center", gap:6,
                   padding:"9px 14px", borderRadius:10, border:"none", cursor:"pointer",

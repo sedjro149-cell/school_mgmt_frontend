@@ -44,20 +44,6 @@ const clampGrade = (v) => {
   return Math.max(0, Math.min(20, Math.round(n * 100) / 100));
 };
 const fmtVal = (n) => (n == null ? "" : String(n));
-const calcAvg = (nums) => {
-  const vals = (nums || []).filter(x => x != null && x !== "");
-  if (!vals.length) return null;
-  return Math.round(vals.reduce((a, b) => a + Number(b), 0) / vals.length * 100) / 100;
-};
-const calcWeightedAvg = (i1, i2, i3, d1, d2) => {
-  const moyI = calcAvg([i1, i2, i3]);
-  const parts = [];
-  if (moyI != null) parts.push(moyI);
-  if (d1   != null) parts.push(Number(d1));
-  if (d2   != null) parts.push(Number(d2));
-  if (!parts.length) return null;
-  return Math.round(parts.reduce((a, b) => a + b, 0) / 3 * 100) / 100;
-};
 const buildQuery = (obj = {}) => {
   const parts = Object.entries(obj)
     .filter(([, v]) => v != null && v !== "")
@@ -317,12 +303,11 @@ const GradeCell = memo(function GradeCell({
   const errs = errors    || {};
   const hasErrors = Object.keys(errs).length > 0;
 
-  const avgI   = calcAvg([g.interrogation1, g.interrogation2, g.interrogation3]);
-  const avgD   = calcAvg([g.devoir1, g.devoir2]);
-  const avgTot = calcWeightedAvg(
-    g.interrogation1, g.interrogation2, g.interrogation3,
-    g.devoir1, g.devoir2,
-  );
+  // ── Moyennes calculées par le backend au lock() — JAMAIS recalculées ici ──
+  // Avant le verrouillage du trimestre, ces champs sont null → on affiche "—".
+  // Le backend est la seule source de vérité pour les moyennes.
+  const avgI   = g.average_interro  != null ? parseFloat(g.average_interro)  : null;
+  const avgTot = g.average_subject  != null ? parseFloat(g.average_subject)  : null;
   const avgColor = colorForGrade(avgTot);
 
   const handleContainerBlur = (e) => {
@@ -434,24 +419,21 @@ const GradeCell = memo(function GradeCell({
             <span style={{ fontSize:9, fontWeight:700, color:T.textMuted,
               display:"flex", alignItems:"center", gap:2 }}>
               <span style={{ color:isLocked?"#f59e0b":COL.from, fontSize:8 }}>I̅</span>
-              <span style={{ color:colorForGrade(avgI)||T.textSecondary, fontWeight:800 }}>{avgI}</span>
-            </span>
-          )}
-          {avgD !== null && (
-            <span style={{ fontSize:9, fontWeight:700, color:T.textMuted,
-              display:"flex", alignItems:"center", gap:2 }}>
-              <span style={{ color:isLocked?"#f59e0b":"#f97316", fontSize:8 }}>D̅</span>
-              <span style={{ color:colorForGrade(avgD)||T.textSecondary, fontWeight:800 }}>{avgD}</span>
+              <span style={{ color:colorForGrade(avgI)||T.textSecondary, fontWeight:800 }}>{avgI.toFixed(2)}</span>
             </span>
           )}
         </div>
-        {avgTot !== null && (
+        {avgTot !== null ? (
           <div style={{
             padding:"2px 9px", borderRadius:999, fontSize:10, fontWeight:900,
             background: avgColor ? `${avgColor}18` : T.inputBg,
             color: avgColor || T.textMuted,
             border:`1px solid ${avgColor ? avgColor+"33" : T.cardBorder}`,
-          }}>{avgTot}</div>
+          }}>{avgTot.toFixed(2)}</div>
+        ) : (
+          <span style={{ fontSize:9, color:T.textMuted, fontStyle:"italic" }}>
+            non calculé
+          </span>
         )}
       </div>
 
@@ -782,7 +764,10 @@ const GradesInner = () => {
     } finally { setLoading(false); }
   }, [students, subjects, fetchTermStatus]);
 
-  /* ── Moyennes de classe par matière ── */
+  /* ── Moyennes de classe par matière — source : average_subject du backend ── */
+  // average_subject est calculé et figé par le backend au lock() du trimestre.
+  // Avant le lock, ce champ est null → la moyenne de classe n'est pas affichée.
+  // Aucun calcul n'est effectué ici.
   const classAverages = useMemo(() => {
     const map = {};
     subjects.forEach(sub => {
@@ -791,14 +776,15 @@ const GradesInner = () => {
         .map(stu => {
           const key = gradeKey(String(stu.id), String(subjId));
           const g   = gradesMap[key];
-          if (!g) return null;
-          return calcWeightedAvg(
-            g.interrogation1, g.interrogation2, g.interrogation3,
-            g.devoir1, g.devoir2,
-          );
+          if (!g || g.average_subject == null) return null;
+          return parseFloat(g.average_subject);
         })
-        .filter(v => v != null);
-      map[sub.id] = vals.length ? calcAvg(vals) : null;
+        .filter(v => v != null && !Number.isNaN(v));
+      if (vals.length === 0) { map[sub.id] = null; return; }
+      // Moyenne simple des moyennes matière (indicatif, non pondéré par coeff)
+      map[sub.id] = Math.round(
+        vals.reduce((a, b) => a + b, 0) / vals.length * 100
+      ) / 100;
     });
     return map;
   }, [gradesMap, students, subjects]);
