@@ -451,6 +451,11 @@ const GradesInner = () => {
   const [subjects,        setSubjects]        = useState([]);
   const [students,        setStudents]        = useState([]);
   const [filters,         setFilters]         = useState({ school_class:"", student:"", subject:"", term:"" });
+
+  // Notes existantes de l'élève sélectionné pour la classe + trimestre en cours
+  // { [subject_id]: Grade } — mis à jour à chaque changement d'élève/classe/terme
+  const [studentGradesMap,  setStudentGradesMap]  = useState({});
+  const [loadingStudentGrades, setLoadingStudentGrades] = useState(false);
   const [search,          setSearch]          = useState("");
   const [grades,          setGrades]          = useState([]);
   const [loadingGrades,   setLoadingGrades]   = useState(false);
@@ -516,24 +521,15 @@ const GradesInner = () => {
 
   /* ── Fetch notes ── */
   const fetchGrades = useCallback(async (overrideFilters) => {
-    const f = overrideFilters ?? filters;
-
-    // ── Garde obligatoire : on exige au moins une classe ET un trimestre ─────
-    // Sans ce garde, on chargerait toutes les notes de toutes les années
-    // (potentiellement des dizaines de milliers) → freeze du navigateur.
-    if (!f.school_class || !f.term) {
-      setGrades([]);
-      return;
-    }
-
     setLoadingGrades(true);
     try {
+      const f = overrideFilters ?? filters;
       const q = buildQuery({
-        school_class:  f.school_class || undefined,
-        student_id:    f.student      || undefined,
-        subject:       f.subject      || undefined,
-        term:          f.term         || undefined,
-        student_name:  search.trim()  || undefined,
+        school_class: f.school_class || undefined,
+        student_id:   f.student      || undefined,
+        subject:      f.subject      || undefined,
+        term:         f.term         || undefined,
+        student_name: search.trim()  || undefined,
       });
       const data = await fetchData(`/academics/grades/${q}`);
       setGrades(Array.isArray(data) ? data : (data?.results ?? []));
@@ -542,26 +538,41 @@ const GradesInner = () => {
         fetchTermStatus(filters.school_class, filters.term);
         setMsg({ type:"error", text:"Ce trimestre est verrouillé." });
       } else {
-        // Extraction du message d'erreur réel depuis err.body (fetch custom)
-        const body   = err?.body;
-        const detail = typeof body === "string"
-          ? body
-          : body?.detail
-            || body?.non_field_errors?.[0]
-            || (body ? JSON.stringify(body) : null)
-            || "Erreur lors de la récupération des notes.";
-        setMsg({ type:"error", text: detail });
+        setMsg({ type:"error", text:"Erreur lors de la récupération des notes." });
       }
     } finally { setLoadingGrades(false); }
   }, [filters, search, fetchTermStatus]);
 
-  // Recharger les notes dès que la classe OU le trimestre change
-  // (les deux sont requis par fetchGrades — la garde interne protège)
+  // Fetch déclenché sur changement de classe ET trimestre (garde interne dans fetchGrades)
   useEffect(() => { fetchGrades(); }, [filters.school_class, filters.term]); // eslint-disable-line
 
+  /* ── Charge les notes existantes de l'élève sélectionné ── */
+  const fetchStudentGrades = useCallback(async (studentId, classId, term) => {
+    if (!studentId || !classId || !term) {
+      setStudentGradesMap({});
+      return;
+    }
+    setLoadingStudentGrades(true);
+    try {
+      const q = buildQuery({ student_id: studentId, school_class: classId, term });
+      const data = await fetchData(`/academics/grades/${q}`);
+      const list = Array.isArray(data) ? data : (data?.results ?? []);
+      const map = {};
+      list.forEach(g => {
+        const sid = g.subject?.id ?? g.subject_id;
+        if (sid != null) map[String(sid)] = g;
+      });
+      setStudentGradesMap(map);
+    } catch {
+      setStudentGradesMap({});
+    } finally {
+      setLoadingStudentGrades(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (filters.student) setForm((p) => ({ ...p, student_id: filters.student }));
-  }, [filters.student]);
+    fetchStudentGrades(filters.student, filters.school_class, filters.term);
+  }, [filters.student, filters.school_class, filters.term, fetchStudentGrades]);
 
   /* ── Submit ── */
   const handleSubmit = async () => {
@@ -574,31 +585,57 @@ const GradesInner = () => {
       return;
     }
     setSaving(true);
+
     const toNum = (v) => (v === "" || v === null || v === undefined) ? null : Number(v);
-    const payload = {
-      student_ref: form.student_id, subject_ref: form.subject_id, term: form.term || "T1",
-      interrogation1: toNum(form.interrogation1), interrogation2: toNum(form.interrogation2),
+
+    // Récupérer le grade existant pour cet élève/matière (chargé au préalable)
+    const existingGrade = studentGradesMap[String(form.subject_id)] ?? null;
+
+    // Payload bulk_upsert — on fusionne les valeurs existantes avec les nouvelles.
+    // Si le formulaire a été pré-rempli, les champs non modifiés conservent leur valeur.
+    // Si id est fourni, bulk_upsert met à jour uniquement les champs inclus dans le payload.
+    const line = {
+      ...(existingGrade?.id ? { id: existingGrade.id } : {}),
+      student_id: form.student_id,         // PK entier résolu via slug_field="id"
+      subject_id: parseInt(form.subject_id, 10),
+      term:       form.term || filters.term || "T1",
+      interrogation1: toNum(form.interrogation1),
+      interrogation2: toNum(form.interrogation2),
       interrogation3: toNum(form.interrogation3),
-      devoir1: toNum(form.devoir1), devoir2: toNum(form.devoir2),
+      devoir1:        toNum(form.devoir1),
+      devoir2:        toNum(form.devoir2),
     };
+
     try {
-      if (form.id) await putData(`/academics/grades/${form.id}/`, payload);
-      else         await postData("/academics/grades/", payload);
-      setMsg({ type:"success", text: form.id ? "Note mise à jour." : "Note créée avec succès." });
-      setForm(EMPTY_FORM);
-      await fetchGrades();
+      const result = await postData("/academics/grades/bulk_upsert/", [line]);
+      const first  = result?.results?.[0];
+      if (first?.status === "error") {
+        setMsg({ type:"error", text: typeof first.errors === "string"
+          ? first.errors
+          : JSON.stringify(first.errors) });
+      } else {
+        const op = first?.status === "created" ? "créée" : "mise à jour";
+        setMsg({ type:"success", text:`Note ${op} avec succès.` });
+        setForm(EMPTY_FORM);
+        // Rafraîchir la carte de l'élève et la liste globale
+        await Promise.all([
+          fetchStudentGrades(filters.student, filters.school_class, filters.term),
+          fetchGrades(),
+        ]);
+      }
     } catch (err) {
       if (err?.status === 423) {
         fetchTermStatus(filters.school_class, filters.term);
         setMsg({ type:"error", text:"Ce trimestre est verrouillé — opération refusée." });
       } else {
-        // err.body contient le corps JSON retourné par le backend (fetch custom)
         const body   = err?.body;
         const detail = typeof body === "string"
           ? body
           : body?.detail
             || body?.non_field_errors?.[0]
-            || (body ? Object.entries(body).map(([k,v]) => `${k}: ${Array.isArray(v)?v.join(", "):v}`).join(" | ") : null)
+            || (body ? Object.entries(body).map(([k,v]) =>
+                `${k}: ${Array.isArray(v) ? v.join(", ") : v}`
+              ).join(" | ") : null)
             || "Erreur lors de l'enregistrement.";
         setMsg({ type:"error", text: detail });
       }
@@ -878,9 +915,22 @@ const GradesInner = () => {
                     : isEditing ? <FaEdit style={{ width:12,height:12,color:"#fff" }} />
                     : <FaPlus style={{ width:12,height:12,color:"#fff" }} />}
                 </div>
-                <p style={{ fontSize:13, fontWeight:800, color:T.textPrimary }}>
-                  {isLocked ? "Trimestre verrouillé" : isEditing ? "Modifier la note" : "Nouvelle saisie"}
-                </p>
+                <div>
+                  <p style={{ fontSize:13, fontWeight:800, color:T.textPrimary }}>
+                    {isLocked ? "Trimestre verrouillé" : isEditing ? "Modifier la note" : "Nouvelle saisie"}
+                  </p>
+                  {/* Badge indiquant que des notes existantes ont été chargées */}
+                  {!isLocked && form.id && (
+                    <p style={{ fontSize:9, color:"#f59e0b", fontWeight:700, marginTop:1 }}>
+                      ✦ Notes existantes pré-chargées — modifiez puis enregistrez
+                    </p>
+                  )}
+                  {!isLocked && !form.id && form.student_id && form.subject_id && loadingStudentGrades && (
+                    <p style={{ fontSize:9, color:T.textMuted, marginTop:1 }}>
+                      Chargement des notes existantes…
+                    </p>
+                  )}
+                </div>
               </div>
               {isEditing && !isLocked && (
                 <button onClick={() => setForm(EMPTY_FORM)} style={{
@@ -914,7 +964,22 @@ const GradesInner = () => {
                 <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
                   letterSpacing:"0.07em", color:T.textMuted, marginBottom:4 }}>Élève *</p>
                 <Sel icon={FaUserGraduate} value={form.student_id}
-                  onChange={(e) => setForm((p) => ({ ...p, student_id: e.target.value }))}
+                  onChange={(e) => {
+                    const sid = e.target.value;
+                    const existing = sid && form.subject_id
+                      ? studentGradesMap[String(form.subject_id)]
+                      : null;
+                    setForm((p) => ({
+                      ...p,
+                      student_id: sid,
+                      id:              existing?.id ?? null,
+                      interrogation1:  existing?.interrogation1 ?? "",
+                      interrogation2:  existing?.interrogation2 ?? "",
+                      interrogation3:  existing?.interrogation3 ?? "",
+                      devoir1:         existing?.devoir1 ?? "",
+                      devoir2:         existing?.devoir2 ?? "",
+                    }));
+                  }}
                   disabled={students.length===0}>
                   <option value="">
                     {filters.school_class
@@ -929,7 +994,22 @@ const GradesInner = () => {
                 <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
                   letterSpacing:"0.07em", color:T.textMuted, marginBottom:4 }}>Matière *</p>
                 <Sel icon={FaBookOpen} value={form.subject_id}
-                  onChange={(e) => setForm((p) => ({ ...p, subject_id: e.target.value }))}>
+                  onChange={(e) => {
+                    const subId = e.target.value;
+                    const existing = subId && form.student_id
+                      ? studentGradesMap[String(subId)]
+                      : null;
+                    setForm((p) => ({
+                      ...p,
+                      subject_id: subId,
+                      id:              existing?.id ?? null,
+                      interrogation1:  existing?.interrogation1 ?? "",
+                      interrogation2:  existing?.interrogation2 ?? "",
+                      interrogation3:  existing?.interrogation3 ?? "",
+                      devoir1:         existing?.devoir1 ?? "",
+                      devoir2:         existing?.devoir2 ?? "",
+                    }));
+                  }}>
                   <option value="">— Sélectionner —</option>
                   {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </Sel>
@@ -1018,27 +1098,7 @@ const GradesInner = () => {
 
           {/* RÉSULTATS */}
           <div>
-            {!filters.school_class || !filters.term ? (
-              <div style={{
-                borderRadius:16, padding:"60px 24px", textAlign:"center",
-                background:T.cardBg, border:`2px dashed ${COL.from}44`,
-                animation:"fadeUp .3s ease-out",
-              }}>
-                <div style={{
-                  width:64, height:64, borderRadius:20, margin:"0 auto 16px",
-                  display:"flex", alignItems:"center", justifyContent:"center",
-                  background:`linear-gradient(135deg,${COL.from}22,${COL.to}11)`,
-                }}>
-                  <FaBookOpen style={{ width:26,height:26,color:COL.from,opacity:.5 }} />
-                </div>
-                <p style={{ fontSize:16, fontWeight:800, color:T.textSecondary }}>
-                  Sélectionnez une classe et un trimestre
-                </p>
-                <p style={{ fontSize:12, color:T.textMuted, marginTop:6 }}>
-                  Les notes s'afficheront ici après avoir choisi une classe et un trimestre dans les filtres.
-                </p>
-              </div>
-            ) : loadingGrades ? (
+            {loadingGrades ? (
               <div style={{ display:"grid", gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr", gap:12 }}>
                 {[...Array(4)].map((_, i) => (
                   <div key={i} style={{
