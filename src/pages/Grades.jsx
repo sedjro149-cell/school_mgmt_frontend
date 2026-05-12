@@ -1,115 +1,545 @@
 // src/pages/Grades.jsx
+/**
+ * Gestion des Notes — Saisie et consultation individuelle
+ *
+ * Architecture :
+ *   Année → Classe → Trimestre → Élève → Tableau matières × notes
+ *
+ * Règles strictes :
+ *   • Aucun calcul client (averages = backend au lock)
+ *   • bulk_upsert : seuls les champs TOUCHÉS sont envoyés → zéro écrasement
+ *   • Années clôturées / trimestres verrouillés → lecture seule automatique
+ *   • gradesIndex construit depuis la liste de la classe (pas de fetch par élève)
+ */
+
 import React, {
-  useCallback, useEffect, useMemo, useRef, useState,
+  useState, useEffect, useCallback, useMemo,
 } from "react";
 import {
-  FaEdit, FaTrash, FaSearch, FaCalculator,
-  FaUserGraduate, FaBookOpen, FaLayerGroup,
-  FaSave, FaEraser, FaCheck, FaSyncAlt,
-  FaExclamationTriangle, FaMoon, FaSun,
-  FaTimes, FaPlus, FaExclamationCircle,
-  FaLock, FaLockOpen, FaEye,
+  FaBookOpen, FaCheck, FaChevronDown, FaEdit, FaEye,
+  FaGraduationCap, FaLayerGroup, FaLock, FaLockOpen,
+  FaMoon, FaSave, FaSun, FaSyncAlt, FaTimes,
+  FaExclamationTriangle, FaCheckCircle, FaHistory,
 } from "react-icons/fa";
-import { fetchData, postData, putData, deleteData } from "./api";
+import { fetchData, postData } from "./api";
 import {
-  ThemeCtx, useTheme, LIGHT, DARK,
-  SECTION_PALETTE, avatarGradient, BASE_KEYFRAMES,
+  ThemeCtx, useTheme, LIGHT, DARK, SECTION_PALETTE, BASE_KEYFRAMES,
 } from "./theme";
 
-const COL = SECTION_PALETTE.finance;
+/* ─── Couleurs ───────────────────────────────────────────────────────────── */
+const COL = SECTION_PALETTE?.academics ?? SECTION_PALETTE?.tool ?? {
+  from: "#6366f1", to: "#8b5cf6", shadow: "#6366f133",
+};
 
-/* ── UTILS ── */
-function buildQuery(obj = {}) {
-  const parts = Object.entries(obj)
+/* ─── Constantes ──────────────────────────────────────────────────────────── */
+const NOTE_FIELDS = [
+  { key: "interrogation1", label: "I₁", color: "#6366f1" },
+  { key: "interrogation2", label: "I₂", color: "#6366f1" },
+  { key: "interrogation3", label: "I₃", color: "#6366f1" },
+  { key: "devoir1",        label: "D₁", color: "#f59e0b" },
+  { key: "devoir2",        label: "D₂", color: "#f59e0b" },
+];
+
+const STATUS_META = {
+  draft:     { label: "Brouillon",  color: "#6366f1", Icon: FaLockOpen },
+  locked:    { label: "Verrouillé", color: "#f59e0b", Icon: FaLock     },
+  published: { label: "Publié",     color: "#10b981", Icon: FaEye      },
+};
+
+/* ─── Utilitaires ────────────────────────────────────────────────────────── */
+const gradeKey = (sid, subid) => `${String(sid)}::${String(subid)}`;
+
+const clamp = (n) => Math.min(20, Math.max(0, Number(n)));
+
+const toNum = (raw) => {
+  if (raw === "" || raw === null || raw === undefined) return null;
+  const n = parseFloat(String(raw).replace(",", "."));
+  return Number.isNaN(n) ? null : clamp(n);
+};
+
+function gradeColor(v) {
+  const n = parseFloat(v);
+  if (Number.isNaN(n)) return null;
+  if (n >= 16) return "#10b981";
+  if (n >= 12) return "#3b82f6";
+  if (n >= 10) return "#f59e0b";
+  return "#ef4444";
+}
+
+function buildQuery(params = {}) {
+  const parts = Object.entries(params)
     .filter(([, v]) => v !== null && v !== undefined && v !== "")
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
   return parts.length ? `?${parts.join("&")}` : "";
 }
-const studentLabel = (s) => {
-  if (!s) return "—";
-  if (s.user?.first_name || s.user?.last_name)
-    return `${s.user.first_name || ""} ${s.user.last_name || ""}`.trim();
-  if (s.first_name || s.last_name)
-    return `${s.first_name || ""} ${s.last_name || ""}`.trim();
-  return s.username || `Élève #${s.id}`;
-};
 
-const TERMS = [
-  { v:"T1", label:"1er Trimestre" },
-  { v:"T2", label:"2e Trimestre"  },
-  { v:"T3", label:"3e Trimestre"  },
-];
-const TERM_COLORS = {
-  T1:{ from:"#3b82f6", to:"#06b6d4" },
-  T2:{ from:"#10b981", to:"#14b8a6" },
-  T3:{ from:"#f59e0b", to:"#f97316" },
-};
-const STATUS_META = {
-  draft:     { label:"Brouillon",  color:"#6366f1", bg:"#6366f118", Icon: FaLockOpen },
-  locked:    { label:"Verrouillé", color:"#f59e0b", bg:"#f59e0b18", Icon: FaLock     },
-  published: { label:"Publié",     color:"#10b981", bg:"#10b98118", Icon: FaEye      },
-};
+function handleApiError(err) {
+  if ((err?.status ?? err?.statusCode) === 401) {
+    try {
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("refresh_token");
+    } catch {}
+    window.location.href = "/login";
+  }
+}
 
-/* ── DARK TOGGLE ── */
-const DarkToggle = () => {
+function extractErrorMsg(err) {
+  const body = err?.body;
+  if (!body) return "Erreur serveur.";
+  if (typeof body === "string") return body;
+  return body.detail
+    || body.non_field_errors?.[0]
+    || Object.entries(body)
+        .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
+        .join(" | ")
+    || "Erreur inconnue.";
+}
+
+/* ─── DarkToggle ─────────────────────────────────────────────────────────── */
+function DarkToggle() {
   const { dark, toggle } = useTheme();
-  const [hov, setHov] = useState(false);
   return (
-    <button onClick={toggle} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+    <button onClick={toggle}
+      title={dark ? "Mode clair" : "Mode sombre"}
       style={{
-        position:"relative", width:52, height:28, borderRadius:999,
-        border:"none", cursor:"pointer", flexShrink:0, outline:"none", transition:"all .3s",
-        background: dark ? "linear-gradient(135deg,#6366f1,#8b5cf6)"
+        width: 46, height: 25, borderRadius: 13, border: "none",
+        cursor: "pointer", position: "relative", flexShrink: 0,
+        transition: "background .3s",
+        background: dark
+          ? "linear-gradient(135deg,#6366f1,#8b5cf6)"
           : `linear-gradient(135deg,${COL.from},${COL.to})`,
-        boxShadow: hov ? `0 0 18px ${COL.shadow}` : "0 2px 8px rgba(0,0,0,.2)",
       }}>
-      <div style={{
-        position:"absolute", top:2, width:24, height:24, borderRadius:999,
-        background:"#fff", display:"flex", alignItems:"center", justifyContent:"center",
-        transition:"all .3s", left: dark ? "calc(100% - 26px)" : 2,
-        boxShadow:"0 2px 6px rgba(0,0,0,.25)",
+      <span style={{
+        position: "absolute", top: 2.5,
+        left: dark ? "calc(100% - 22px)" : 2.5,
+        width: 20, height: 20, borderRadius: "50%",
+        background: "#fff", display: "flex", alignItems: "center",
+        justifyContent: "center", transition: "left .3s",
+        boxShadow: "0 1px 4px rgba(0,0,0,.2)",
       }}>
-        {dark ? <FaMoon style={{ width:11,height:11,color:"#6366f1" }} />
-               : <FaSun  style={{ width:11,height:11,color:COL.from  }} />}
-      </div>
+        {dark
+          ? <FaMoon style={{ width: 9, height: 9, color: "#6366f1" }} />
+          : <FaSun  style={{ width: 9, height: 9, color: COL.from  }} />}
+      </span>
     </button>
   );
-};
+}
 
-/* ── TOAST ── */
-const Toast = ({ msg, onClose }) => {
+/* ─── Toast ──────────────────────────────────────────────────────────────── */
+function Toast({ msg, onClose, T }) {
   useEffect(() => {
-    if (msg) { const t = setTimeout(onClose, 4500); return () => clearTimeout(t); }
+    if (!msg) return;
+    const t = setTimeout(onClose, 4500);
+    return () => clearTimeout(t);
   }, [msg, onClose]);
+
   if (!msg) return null;
-  const isErr = msg.type === "error";
+  const ok  = msg.type === "success";
+  const col = ok ? "#10b981" : "#ef4444";
+  const Icon = ok ? FaCheckCircle : FaExclamationTriangle;
+
   return (
-    <div onClick={onClose} style={{
-      position:"fixed", bottom:24, right:24, zIndex:300,
-      display:"flex", alignItems:"center", gap:10, padding:"13px 18px",
-      borderRadius:14, cursor:"pointer", fontWeight:700, fontSize:12, color:"#fff",
-      animation:"slideUp .3s cubic-bezier(.34,1.56,.64,1)", maxWidth:360,
-      background: isErr ? "linear-gradient(135deg,#ef4444,#dc2626)"
-        : `linear-gradient(135deg,${COL.from},${COL.to})`,
-      boxShadow: isErr ? "0 8px 24px #ef444444" : `0 8px 24px ${COL.shadow}`,
+    <div style={{
+      position: "fixed", bottom: 24, right: 24, zIndex: 999,
+      display: "flex", alignItems: "flex-start", gap: 10,
+      padding: "14px 18px", borderRadius: 14,
+      background: T.cardBg, border: `1.5px solid ${col}44`,
+      boxShadow: `0 8px 28px ${col}22`,
+      animation: "fadeUp .25s ease-out",
+      maxWidth: 440,
     }}>
-      {isErr ? <FaExclamationTriangle style={{ flexShrink:0,width:13,height:13 }} />
-             : <FaCheck style={{ flexShrink:0,width:13,height:13 }} />}
-      {msg.text}
+      <Icon style={{ color: col, width: 15, height: 15, flexShrink: 0, marginTop: 1 }} />
+      <span style={{ fontSize: 13, fontWeight: 600, color: T.textPrimary, flex: 1,
+        lineHeight: 1.45 }}>{msg.text}</span>
+      <button onClick={onClose} style={{
+        background: "none", border: "none", cursor: "pointer",
+        color: T.textMuted, flexShrink: 0, padding: 2,
+      }}>
+        <FaTimes style={{ width: 10, height: 10 }} />
+      </button>
     </div>
   );
-};
+}
 
-/* ── CONFIRM DIALOG ── */
-const ConfirmDialog = ({ open, title, message, onConfirm, onCancel }) => {
+/* ─── Select stylé ───────────────────────────────────────────────────────── */
+function Sel({ value, onChange, disabled, children, T, accentColor }) {
+  const ac = accentColor || COL.from;
+  return (
+    <div style={{ position: "relative" }}>
+      <select value={value} onChange={onChange} disabled={disabled}
+        style={{
+          width: "100%", appearance: "none",
+          paddingLeft: 12, paddingRight: 28,
+          paddingTop: 8, paddingBottom: 8,
+          fontSize: 13, fontWeight: 600, borderRadius: 10, outline: "none",
+          background: T.inputBg,
+          color: value ? T.textPrimary : T.textMuted,
+          border: `1.5px solid ${T.inputBorder}`,
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.55 : 1,
+          transition: "border-color .15s",
+        }}
+        onFocus={e  => (e.target.style.borderColor = ac)}
+        onBlur={e   => (e.target.style.borderColor = T.inputBorder)}>
+        {children}
+      </select>
+      <FaChevronDown style={{
+        position: "absolute", right: 9, top: "50%",
+        transform: "translateY(-50%)",
+        width: 9, height: 9, color: T.textMuted, pointerEvents: "none",
+      }} />
+    </div>
+  );
+}
+
+/* ─── Input note ──────────────────────────────────────────────────────────── */
+function NoteInput({ value, onChange, disabled, T }) {
+  const n   = toNum(value);
+  const col = n !== null ? gradeColor(n) : null;
+  return (
+    <input
+      type="number" min={0} max={20} step={0.25}
+      value={value ?? ""}
+      onChange={e => onChange(e.target.value)}
+      disabled={disabled}
+      style={{
+        width: 58, textAlign: "center", fontSize: 12, fontWeight: 700,
+        padding: "5px 3px", borderRadius: 8, outline: "none",
+        background: disabled ? T.inputBg : T.cardBg,
+        color: col || T.textPrimary,
+        border: `1.5px solid ${col ? col + "66" : T.inputBorder}`,
+        cursor: disabled ? "not-allowed" : "text",
+        opacity: disabled ? 0.5 : 1,
+        transition: "border-color .15s, color .15s",
+      }}
+      onFocus={e  => { if (!disabled) e.target.style.borderColor = COL.from; }}
+      onBlur={e   => { e.target.style.borderColor = col ? col + "66" : T.inputBorder; }}
+    />
+  );
+}
+
+/* ─── Cellule lecture ─────────────────────────────────────────────────────── */
+function ReadCell({ value, isAvg, T }) {
+  const n   = (value !== null && value !== undefined && value !== "")
+    ? parseFloat(String(value)) : null;
+  const col = n !== null ? gradeColor(n) : null;
+  return (
+    <span style={{
+      fontSize: isAvg ? 13 : 12, fontWeight: isAvg ? 900 : 500,
+      color: col || T.textMuted,
+      display: "inline-block",
+      padding: isAvg ? "2px 9px" : 0,
+      borderRadius: isAvg ? 7 : 0,
+      background: isAvg && col ? `${col}14` : "transparent",
+      minWidth: isAvg ? 50 : 36, textAlign: "center",
+    }}>
+      {n !== null ? String(n).replace(".", ",") : "—"}
+    </span>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PAGE PRINCIPALE
+═══════════════════════════════════════════════════════════════════════════ */
+function GradesInner() {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
+
+  /* ── Années scolaires ── */
+  const [allYears,     setAllYears]     = useState([]);
+  const [selectedYear, setSelectedYear] = useState(null);
+  const [loadingYears, setLoadingYears] = useState(true);
+  const yearIsClosed = selectedYear?.is_closed ?? false;
+  const nbTerms      = selectedYear?.nb_terms  ?? 3;
+
+  /* ── Roster (classes + élèves) ── */
+  const [roster,        setRoster]        = useState(null);
+  const [loadingRoster, setLoadingRoster] = useState(false);
+  const classes = roster?.classes ?? [];
+
+  /* ── Filtres ── */
+  const [selectedClass,   setSelectedClass]   = useState("");
+  const [selectedTerm,    setSelectedTerm]     = useState("T1");
+  const [selectedStudent, setSelectedStudent] = useState("");
+
+  const termOptions = useMemo(
+    () => Array.from({ length: nbTerms }, (_, i) => `T${i + 1}`),
+    [nbTerms]
+  );
+
+  /* ── Données de la classe ── */
+  const [classSubjects,   setClassSubjects]   = useState([]);
+  const [loadingSubjects, setLoadingSubjects] = useState(false);
+
+  /* ── Notes de la classe ── */
+  const [grades,        setGrades]        = useState([]);
+  const [loadingGrades, setLoadingGrades] = useState(false);
+
+  /* ── TermStatus ── */
+  const [termStatus, setTermStatus] = useState(null);
+  const isEditable = !yearIsClosed
+    && termStatus?.status !== "locked"
+    && termStatus?.status !== "published";
+
+  /* ── Mode édition & éditions en attente ── */
+  const [editMode,     setEditMode]     = useState(false);
+  const [pendingEdits, setPendingEdits] = useState({});
+  // { [subject_id]: { interrogation1: "14", interrogation2: "", ... } }
+  // UNIQUEMENT les champs que l'utilisateur a TOUCHÉS
+
+  /* ── Sauvegarde ── */
+  const [savingRows, setSavingRows] = useState({});
+  const [savingAll,  setSavingAll]  = useState(false);
+
+  /* ── Toast ── */
+  const [msg, setMsg] = useState(null);
+
+  /* ── Dérivés ── */
+  const students = useMemo(() => {
+    if (!selectedClass) return [];
+    return classes.find(c => String(c.id) === String(selectedClass))?.students ?? [];
+  }, [classes, selectedClass]);
+
+  const currentStudent = useMemo(
+    () => students.find(s => String(s.id) === String(selectedStudent)) ?? null,
+    [students, selectedStudent]
+  );
+
+  // Index des notes : gradeKey(student_id, subject_id) → Grade
+  const gradesIndex = useMemo(() => {
+    const idx = {};
+    grades.forEach(g => {
+      const sid   = g.student?.id ?? g.student_id ?? null;
+      const subid = g.subject?.id ?? g.subject_id ?? null;
+      if (sid != null && subid != null)
+        idx[gradeKey(String(sid), String(subid))] = g;
+    });
+    return idx;
+  }, [grades]);
+
+  // Lignes : classSubject × grade pour l'élève courant
+  const rows = useMemo(() => {
+    if (!currentStudent) return [];
+    return classSubjects.map(cs => {
+      const subid = cs.subject?.id ?? cs.subject_id;
+      return {
+        cs,
+        subjectId:   subid,
+        subjectName: cs.subject?.name ?? `Matière #${subid}`,
+        coefficient: cs.coefficient,
+        grade: gradesIndex[gradeKey(String(currentStudent.id), String(subid))] ?? null,
+      };
+    });
+  }, [classSubjects, gradesIndex, currentStudent]);
+
+  // Nombre total de champs touchés
+  const dirtyCount = useMemo(
+    () => Object.values(pendingEdits).reduce((acc, f) => acc + Object.keys(f).length, 0),
+    [pendingEdits]
+  );
+
+  /* ─────────────────── CHARGEMENTS ─────────────────────────────────────── */
+
+  // 1. Années au montage
   useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
-    return () => { document.body.style.overflow = ""; };
-  }, [open]);
-  if (!open) return null;
-  return (
+    (async () => {
+      setLoadingYears(true);
+      try {
+        const data = await fetchData("/academics/school-years/");
+        const arr  = (Array.isArray(data) ? data : data?.results ?? [])
+          .sort((a, b) => b.label.localeCompare(a.label));
+        setAllYears(arr);
+        const active = arr.find(y => y.is_active && !y.is_closed) ?? arr[0] ?? null;
+        setSelectedYear(active);
+      } catch (err) { handleApiError(err); }
+      finally { setLoadingYears(false); }
+    })();
+  }, []);
+
+  // 2. Roster quand l'année change
+  useEffect(() => {
+    if (!selectedYear) { setRoster(null); return; }
+    setRoster(null);
+    setSelectedClass(""); setSelectedStudent("");
+    setGrades([]); setTermStatus(null); setPendingEdits({}); setEditMode(false);
+    setLoadingRoster(true);
+    fetchData(`/academics/school-years/${selectedYear.id}/roster/`)
+      .then(d => setRoster(d))
+      .catch(handleApiError)
+      .finally(() => setLoadingRoster(false));
+  }, [selectedYear?.id]); // eslint-disable-line
+
+  // 3. Matières de la classe
+  useEffect(() => {
+    if (!selectedClass) { setClassSubjects([]); return; }
+    setLoadingSubjects(true);
+    fetchData(`/academics/class-subjects/?school_class=${selectedClass}&no_pagination=1`)
+      .then(d => {
+        const arr = (Array.isArray(d) ? d : d?.results ?? []);
+        arr.sort((a, b) =>
+          (b.coefficient - a.coefficient) ||
+          (a.subject?.name ?? "").localeCompare(b.subject?.name ?? "")
+        );
+        setClassSubjects(arr);
+      })
+      .catch(handleApiError)
+      .finally(() => setLoadingSubjects(false));
+  }, [selectedClass]);
+
+  // 4. Notes de la classe + trimestre
+  const fetchGrades = useCallback(async () => {
+    if (!selectedClass || !selectedTerm || !selectedYear) { setGrades([]); return; }
+    setLoadingGrades(true);
+    try {
+      const q = buildQuery({
+        school_class: selectedClass,
+        term:         selectedTerm,
+        school_year:  selectedYear.id,
+      });
+      const d = await fetchData(`/academics/grades/${q}`);
+      setGrades(Array.isArray(d) ? d : d?.results ?? []);
+    } catch (err) {
+      handleApiError(err);
+      setGrades([]);
+    } finally { setLoadingGrades(false); }
+  }, [selectedClass, selectedTerm, selectedYear]);
+
+  useEffect(() => { fetchGrades(); }, [fetchGrades]);
+
+  // 5. TermStatus
+  useEffect(() => {
+    if (!selectedClass || !selectedTerm || !selectedYear) { setTermStatus(null); return; }
+    const q = buildQuery({
+      school_class: selectedClass,
+      term:         selectedTerm,
+      school_year:  selectedYear.id,
+    });
+    fetchData(`/academics/term-status/${q}`)
+      .then(d => {
+        const list = Array.isArray(d) ? d : d?.results ?? [];
+        setTermStatus(list[0] ?? null);
+      })
+      .catch(() => setTermStatus(null));
+  }, [selectedClass, selectedTerm, selectedYear]);
+
+  // Désactiver édition si plus éditable
+  useEffect(() => {
+    if (!isEditable) setEditMode(false);
+  }, [isEditable]);
+
+  // Reset éditions quand contexte change
+  useEffect(() => {
+    setPendingEdits({});
+    setEditMode(false);
+  }, [selectedClass, selectedTerm, selectedStudent, selectedYear?.id]);
+
+  /* ─────────────────── ÉDITIONS ────────────────────────────────────────── */
+
+  const handleFieldChange = useCallback((subjectId, field, value) => {
+    setPendingEdits(prev => ({
+      ...prev,
+      [String(subjectId)]: { ...(prev[String(subjectId)] ?? {}), [field]: value },
+    }));
+  }, []);
+
+  // Valeur à afficher : édition en cours > valeur du grade backend
+  const displayVal = useCallback((subjectId, field, grade) => {
+    const sid   = String(subjectId);
+    const edits = pendingEdits[sid];
+    if (editMode && edits && field in edits) return edits[field];
+    return grade?.[field] ?? "";
+  }, [editMode, pendingEdits]);
+
+  const hasEdits = useCallback(
+    (subjectId) => Object.keys(pendingEdits[String(subjectId)] ?? {}).length > 0,
+    [pendingEdits]
+  );
+
+  /* ─────────────────── SAUVEGARDE ──────────────────────────────────────── */
+
+  /**
+   * buildPayload — même logique que GradesBulkEntry.
+   * N'inclut QUE les champs touchés (pendingEdits) dans le payload.
+   * Les champs absents du payload ne sont PAS mis à jour par bulk_upsert
+   * → aucun écrasement de valeur existante non modifiée.
+   */
+  const buildPayload = useCallback((subjectId, grade) => {
+    const line = {
+      ...(grade?.id ? { id: grade.id } : {}),
+      student_id: String(currentStudent.id),
+      subject_id: Number(subjectId),
+      term:       selectedTerm,
+    };
+    const edits = pendingEdits[String(subjectId)] ?? {};
+    NOTE_FIELDS.forEach(({ key }) => {
+      if (key in edits) {
+        // null envoyé si champ volontairement vidé → backend met à null
+        line[key] = toNum(edits[key]);
+      }
+      // Champs non touchés → absents du payload → inchangés en base
+    });
+    return line;
+  }, [currentStudent, pendingEdits, selectedTerm]);
+
+  const saveRow = useCallback(async (subjectId, grade) => {
+    if (!currentStudent) return;
+    const edits = pendingEdits[String(subjectId)] ?? {};
+    if (!Object.keys(edits).length && !grade?.id) {
+      setMsg({ type: "error", text: "Saisissez au moins une note avant d'enregistrer." });
+      return;
+    }
+    if (!Object.keys(edits).length) {
+      setMsg({ type: "error", text: "Aucune modification pour cette matière." });
+      return;
+    }
+    setSavingRows(s => ({ ...s, [String(subjectId)]: true }));
+    try {
+      const payload = buildPayload(subjectId, grade);
+      const data    = await postData("/academics/grades/bulk_upsert/", [payload]);
+      const result  = (Array.isArray(data?.results) ? data.results : [])[0];
+      if (result?.status === "error") {
+        const e = result.errors;
+        setMsg({ type: "error", text: typeof e === "string" ? e : JSON.stringify(e) });
+      } else {
+        setMsg({ type: "success", text: `Note ${result?.status === "created" ? "enregistrée" : "mise à jour"}.` });
+        setPendingEdits(prev => { const n = { ...prev }; delete n[String(subjectId)]; return n; });
+        await fetchGrades();
+      }
+    } catch (err) {
+      handleApiError(err);
+      setMsg({ type: "error", text: extractErrorMsg(err) });
+    } finally {
+      setSavingRows(s => ({ ...s, [String(subjectId)]: false }));
+    }
+  }, [buildPayload, currentStudent, fetchGrades, pendingEdits]);
+
+  const saveAll = useCallback(async () => {
+    if (!currentStudent) return;
+    const toSave = Object.keys(pendingEdits)
+      .filter(sid => Object.keys(pendingEdits[sid]).length > 0);
+    if (!toSave.length) {
+      setMsg({ type: "error", text: "Aucune modification à enregistrer." });
+      return;
+    }
+    setSavingAll(true);
+    try {
+      const batch = toSave.map(sid => {
+        const grade = gradesIndex[gradeKey(String(currentStudent.id), sid)] ?? null;
+        return buildPayload(sid, grade);
+      });
+      const data    = await postData("/academics/grades/bulk_upsert/", batch);
+      const results = Array.isArray(data?.results) ? data.results : [];
+      const errs    = results.filter(r => r.status === "error");
+      if (errs.length) {
+        setMsg({ type: "error", text: `${errs.length} erreur(s) : ${errs.map(e => JSON.stringify(e.errors)).join(" | ")}` });
+      } else {
+        const created = results.filter(r => r.status === "created").length;
+        const updated = results.filter(r => r.status === "updated").length;
+        setMsg({ type: "success", text: `${created + updated} note(s) sauvegardée(s) (${created} créée${created > 1 ? "s" : ""}, ${updated} mise${updated > 1 ? "s" : ""} à jour).` });
+        setPendingEdits({});
+        await fetchGrades();
+      }
+    } cat  return (
     <div style={{
       position:"fixed", inset:0, zIndex:250,
       background:"rgba(0,0,0,0.55)", backdropFilter:"blur(6px)",
