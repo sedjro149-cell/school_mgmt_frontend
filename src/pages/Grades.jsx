@@ -539,7 +539,7 @@ function GradesInner() {
         setPendingEdits({});
         await fetchGrades();
       }
-    } cat  return (
+    } return (
     <div style={{
       position:"fixed", inset:0, zIndex:250,
       background:"rgba(0,0,0,0.55)", backdropFilter:"blur(6px)",
