@@ -3,81 +3,124 @@ import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from "react";
 import {
-  FaEdit, FaTrash, FaSearch, FaCalculator,
-  FaUserGraduate, FaBookOpen, FaLayerGroup,
-  FaSave, FaEraser, FaCheck, FaSyncAlt,
-  FaExclamationTriangle, FaMoon, FaSun,
-  FaTimes, FaPlus, FaExclamationCircle,
+  FaEdit, FaTrash, FaSearch, FaBookOpen,
+  FaUserGraduate, FaLayerGroup, FaSave,
+  FaEraser, FaCheck, FaSyncAlt, FaPlus,
+  FaExclamationTriangle, FaExclamationCircle,
+  FaMoon, FaSun, FaTimes,
   FaLock, FaLockOpen, FaEye,
+  FaHistory, FaChevronDown,
 } from "react-icons/fa";
-import { fetchData, postData, putData, deleteData } from "./api";
+import { fetchData, postData, deleteData } from "./api";
 import {
   ThemeCtx, useTheme, LIGHT, DARK,
   SECTION_PALETTE, avatarGradient, BASE_KEYFRAMES,
 } from "./theme";
 
-const COL = SECTION_PALETTE.finance;
-
-/* ── UTILS ── */
-function buildQuery(obj = {}) {
-  const parts = Object.entries(obj)
-    .filter(([, v]) => v !== null && v !== undefined && v !== "")
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
-  return parts.length ? `?${parts.join("&")}` : "";
-}
-const studentLabel = (s) => {
-  if (!s) return "—";
-  if (s.user?.first_name || s.user?.last_name)
-    return `${s.user.first_name || ""} ${s.user.last_name || ""}`.trim();
-  if (s.first_name || s.last_name)
-    return `${s.first_name || ""} ${s.last_name || ""}`.trim();
-  return s.username || `Élève #${s.id}`;
+/* ─── Palette ────────────────────────────────────────────────────────────── */
+const COL = SECTION_PALETTE.finance ?? SECTION_PALETTE.tool ?? {
+  from: "#10b981", to: "#059669", shadow: "#10b98133",
 };
 
-const TERMS = [
-  { v:"T1", label:"1er Trimestre" },
-  { v:"T2", label:"2e Trimestre"  },
-  { v:"T3", label:"3e Trimestre"  },
-];
+/* ─── Constantes ─────────────────────────────────────────────────────────── */
 const TERM_COLORS = {
-  T1:{ from:"#3b82f6", to:"#06b6d4" },
-  T2:{ from:"#10b981", to:"#14b8a6" },
-  T3:{ from:"#f59e0b", to:"#f97316" },
+  T1: { from: "#3b82f6", to: "#06b6d4", shadow: "#3b82f633" },
+  T2: { from: "#10b981", to: "#14b8a6", shadow: "#10b98133" },
+  T3: { from: "#f59e0b", to: "#f97316", shadow: "#f59e0b33" },
 };
 const STATUS_META = {
-  draft:     { label:"Brouillon",  color:"#6366f1", bg:"#6366f118", Icon: FaLockOpen },
-  locked:    { label:"Verrouillé", color:"#f59e0b", bg:"#f59e0b18", Icon: FaLock     },
-  published: { label:"Publié",     color:"#10b981", bg:"#10b98118", Icon: FaEye      },
+  draft:     { label: "Brouillon",  color: "#6366f1", bg: "#6366f115", Icon: FaLockOpen },
+  locked:    { label: "Verrouillé", color: "#f59e0b", bg: "#f59e0b15", Icon: FaLock     },
+  published: { label: "Publié",     color: "#10b981", bg: "#10b98115", Icon: FaEye      },
+};
+const NOTE_FIELDS = [
+  { key: "interrogation1", label: "Interro 1", short: "I1", accent: "#6366f1" },
+  { key: "interrogation2", label: "Interro 2", short: "I2", accent: "#6366f1" },
+  { key: "interrogation3", label: "Interro 3", short: "I3", accent: "#6366f1" },
+  { key: "devoir1",        label: "Devoir 1",  short: "D1", accent: "#f97316" },
+  { key: "devoir2",        label: "Devoir 2",  short: "D2", accent: "#f97316" },
+];
+const EMPTY_FORM = {
+  id: null, student_id: "", subject_id: "", term: "T1",
+  interrogation1: "", interrogation2: "", interrogation3: "",
+  devoir1: "", devoir2: "",
 };
 
-/* ── DARK TOGGLE ── */
-const DarkToggle = () => {
+/* ─── Utilitaires ────────────────────────────────────────────────────────── */
+function buildQuery(obj = {}) {
+  const p = Object.entries(obj)
+    .filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+  return p.length ? `?${p.join("&")}` : "";
+}
+
+function studentLabel(s) {
+  if (!s) return "—";
+  const fn = s.user?.first_name  ?? s.first_name  ?? "";
+  const ln = s.user?.last_name   ?? s.last_name   ?? "";
+  return `${ln} ${fn}`.trim() || s.username || `Élève #${s.id}`;
+}
+
+function gradeColor(n) {
+  if (isNaN(n)) return null;
+  if (n >= 16) return "#10b981";
+  if (n >= 12) return "#3b82f6";
+  if (n >= 10) return "#f59e0b";
+  return "#ef4444";
+}
+
+function handleApiError(err) {
+  if ((err?.status ?? err?.statusCode) === 401) {
+    try { localStorage.removeItem("access_token"); } catch {}
+    window.location.href = "/login";
+  }
+}
+
+function extractErrorMsg(err) {
+  if (!err) return "Erreur inconnue.";
+  const body = err?.body;
+  if (!body) return err?.message ?? "Erreur serveur.";
+  if (typeof body === "string") return body;
+  return body.detail
+    ?? body.non_field_errors?.[0]
+    ?? Object.entries(body)
+        .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
+        .join(" | ")
+    ?? "Erreur inconnue.";
+}
+
+/* ─── DarkToggle ─────────────────────────────────────────────────────────── */
+function DarkToggle() {
   const { dark, toggle } = useTheme();
-  const [hov, setHov] = useState(false);
   return (
-    <button onClick={toggle} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+    <button onClick={toggle} title={dark ? "Mode clair" : "Mode sombre"}
       style={{
-        position:"relative", width:52, height:28, borderRadius:999,
-        border:"none", cursor:"pointer", flexShrink:0, outline:"none", transition:"all .3s",
-        background: dark ? "linear-gradient(135deg,#6366f1,#8b5cf6)"
+        position: "relative", width: 50, height: 26, borderRadius: 999,
+        border: "none", cursor: "pointer", flexShrink: 0, outline: "none",
+        transition: "background .3s",
+        background: dark
+          ? "linear-gradient(135deg,#6366f1,#8b5cf6)"
           : `linear-gradient(135deg,${COL.from},${COL.to})`,
-        boxShadow: hov ? `0 0 18px ${COL.shadow}` : "0 2px 8px rgba(0,0,0,.2)",
+        boxShadow: `0 2px 8px rgba(0,0,0,.2)`,
       }}>
-      <div style={{
-        position:"absolute", top:2, width:24, height:24, borderRadius:999,
-        background:"#fff", display:"flex", alignItems:"center", justifyContent:"center",
-        transition:"all .3s", left: dark ? "calc(100% - 26px)" : 2,
-        boxShadow:"0 2px 6px rgba(0,0,0,.25)",
+      <span style={{
+        position: "absolute", top: 2,
+        left: dark ? "calc(100% - 24px)" : 2,
+        width: 22, height: 22, borderRadius: "50%",
+        background: "#fff", display: "flex", alignItems: "center",
+        justifyContent: "center", transition: "left .3s",
+        boxShadow: "0 2px 5px rgba(0,0,0,.22)",
       }}>
-        {dark ? <FaMoon style={{ width:11,height:11,color:"#6366f1" }} />
-               : <FaSun  style={{ width:11,height:11,color:COL.from  }} />}
-      </div>
+        {dark
+          ? <FaMoon style={{ width: 10, height: 10, color: "#6366f1" }} />
+          : <FaSun  style={{ width: 10, height: 10, color: COL.from  }} />}
+      </span>
     </button>
   );
-};
+}
 
-/* ── TOAST ── */
-const Toast = ({ msg, onClose }) => {
+/* ─── Toast ──────────────────────────────────────────────────────────────── */
+function Toast({ msg, onClose }) {
   useEffect(() => {
     if (msg) { const t = setTimeout(onClose, 4500); return () => clearTimeout(t); }
   }, [msg, onClose]);
@@ -85,25 +128,27 @@ const Toast = ({ msg, onClose }) => {
   const isErr = msg.type === "error";
   return (
     <div onClick={onClose} style={{
-      position:"fixed", bottom:24, right:24, zIndex:300,
-      display:"flex", alignItems:"center", gap:10, padding:"13px 18px",
-      borderRadius:14, cursor:"pointer", fontWeight:700, fontSize:12, color:"#fff",
-      animation:"slideUp .3s cubic-bezier(.34,1.56,.64,1)", maxWidth:360,
-      background: isErr ? "linear-gradient(135deg,#ef4444,#dc2626)"
+      position: "fixed", bottom: 24, right: 24, zIndex: 300,
+      display: "flex", alignItems: "center", gap: 10,
+      padding: "12px 18px", borderRadius: 14,
+      cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#fff",
+      animation: "slideUp .3s cubic-bezier(.34,1.56,.64,1)", maxWidth: 380,
+      background: isErr
+        ? "linear-gradient(135deg,#ef4444,#dc2626)"
         : `linear-gradient(135deg,${COL.from},${COL.to})`,
       boxShadow: isErr ? "0 8px 24px #ef444444" : `0 8px 24px ${COL.shadow}`,
     }}>
-      {isErr ? <FaExclamationTriangle style={{ flexShrink:0,width:13,height:13 }} />
-             : <FaCheck style={{ flexShrink:0,width:13,height:13 }} />}
+      {isErr
+        ? <FaExclamationTriangle style={{ width: 13, height: 13, flexShrink: 0 }} />
+        : <FaCheck               style={{ width: 13, height: 13, flexShrink: 0 }} />}
       {msg.text}
     </div>
   );
-};
+}
 
-/* ── CONFIRM DIALOG ── */
-const ConfirmDialog = ({ open, title, message, onConfirm, onCancel }) => {
-  const { dark } = useTheme();
-  const T = dark ? DARK : LIGHT;
+/* ─── ConfirmDialog ──────────────────────────────────────────────────────── */
+function ConfirmDialog({ open, onConfirm, onCancel }) {
+  const { dark } = useTheme(); const T = dark ? DARK : LIGHT;
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
@@ -111,1029 +156,1189 @@ const ConfirmDialog = ({ open, title, message, onConfirm, onCancel }) => {
   if (!open) return null;
   return (
     <div style={{
-      position:"fixed", inset:0, zIndex:250,
-      background:"rgba(0,0,0,0.55)", backdropFilter:"blur(6px)",
-      display:"flex", alignItems:"center", justifyContent:"center",
-      padding:16, animation:"fadeIn .15s ease-out",
+      position: "fixed", inset: 0, zIndex: 250,
+      background: "rgba(0,0,0,.55)", backdropFilter: "blur(6px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 16, animation: "fadeIn .15s ease-out",
     }}>
       <div style={{
-        width:"100%", maxWidth:380, background:T.cardBg, borderRadius:18,
-        boxShadow:"0 24px 60px rgba(0,0,0,.35)",
-        border:`1.5px solid ${T.cardBorder}`,
-        animation:"panelUp .2s cubic-bezier(.34,1.4,.64,1)",
-        overflow:"hidden",
+        width: "100%", maxWidth: 360, background: T.cardBg, borderRadius: 18,
+        border: `1.5px solid ${T.cardBorder}`,
+        boxShadow: "0 24px 60px rgba(0,0,0,.3)",
+        animation: "panelUp .2s cubic-bezier(.34,1.4,.64,1)", overflow: "hidden",
       }}>
-        <div style={{ height:4, background:"linear-gradient(90deg,#ef4444,#dc2626)" }} />
-        <div style={{ padding:"20px 20px 14px" }}>
-          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+        <div style={{ height: 4, background: "linear-gradient(90deg,#ef4444,#dc2626)" }} />
+        <div style={{ padding: "20px 20px 14px" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 10 }}>
             <div style={{
-              width:34, height:34, borderRadius:10, flexShrink:0,
-              display:"flex", alignItems:"center", justifyContent:"center", background:"#ef444418",
+              width: 32, height: 32, borderRadius: 9, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "#ef444415",
             }}>
-              <FaExclamationCircle style={{ width:15,height:15,color:"#ef4444" }} />
+              <FaExclamationCircle style={{ width: 14, height: 14, color: "#ef4444" }} />
             </div>
-            <p style={{ fontSize:14, fontWeight:800, color:T.textPrimary }}>{title}</p>
+            <div>
+              <p style={{ fontSize: 14, fontWeight: 800, color: T.textPrimary }}>
+                Supprimer cette note ?
+              </p>
+              <p style={{ fontSize: 12, color: T.textSecondary, marginTop: 4, lineHeight: 1.5 }}>
+                Cette action est irréversible.
+              </p>
+            </div>
           </div>
-          <p style={{ fontSize:12, color:T.textSecondary, lineHeight:1.6, paddingLeft:44 }}>
-            {message}
-          </p>
         </div>
         <div style={{
-          padding:"12px 20px", borderTop:`1px solid ${T.divider}`,
-          display:"flex", justifyContent:"flex-end", gap:8,
+          padding: "12px 20px", borderTop: `1px solid ${T.divider}`,
+          display: "flex", justifyContent: "flex-end", gap: 8,
         }}>
           <button onClick={onCancel} style={{
-            padding:"8px 16px", borderRadius:9, border:`1.5px solid ${T.cardBorder}`,
-            background:"transparent", cursor:"pointer", fontSize:12, fontWeight:700,
-            color:T.textSecondary, fontFamily:"'Plus Jakarta Sans', sans-serif",
+            padding: "8px 16px", borderRadius: 9,
+            border: `1.5px solid ${T.cardBorder}`, background: "transparent",
+            cursor: "pointer", fontSize: 12, fontWeight: 700, color: T.textSecondary,
           }}>Annuler</button>
           <button onClick={onConfirm} style={{
-            padding:"8px 18px", borderRadius:9, border:"none", cursor:"pointer",
-            fontSize:12, fontWeight:800, color:"#fff",
-            background:"linear-gradient(135deg,#ef4444,#dc2626)",
-            boxShadow:"0 4px 12px #ef444444",
-            fontFamily:"'Plus Jakarta Sans', sans-serif",
+            padding: "8px 18px", borderRadius: 9, border: "none",
+            cursor: "pointer", fontSize: 12, fontWeight: 800, color: "#fff",
+            background: "linear-gradient(135deg,#ef4444,#dc2626)",
+            boxShadow: "0 4px 12px #ef444433",
           }}>Supprimer</button>
         </div>
       </div>
     </div>
   );
-};
+}
 
-/* ── LOCK BANNER ── */
-const LockBanner = ({ termStatus }) => {
-  const { dark } = useTheme();
-  if (!termStatus || termStatus.status === "draft") return null;
-  const meta = STATUS_META[termStatus.status] || STATUS_META.locked;
-  const { Icon } = meta;
+/* ─── Styled Select ──────────────────────────────────────────────────────── */
+function Sel({ icon: Icon, children, value, onChange, disabled, T }) {
+  const [foc, setFoc] = useState(false);
   return (
-    <div style={{
-      display:"flex", alignItems:"center", gap:10,
-      padding:"11px 16px", borderRadius:11, marginBottom:14,
-      background: meta.bg, border:`1.5px solid ${meta.color}33`,
-    }}>
-      <Icon style={{ width:15, height:15, color:meta.color, flexShrink:0 }} />
-      <div style={{ flex:1 }}>
-        <p style={{ fontSize:12, fontWeight:800, color:meta.color }}>
-          Trimestre {meta.label.toLowerCase()} — ajouts et modifications désactivés
-        </p>
-        <p style={{ fontSize:10, color:meta.color, opacity:0.8, marginTop:2 }}>
-          {termStatus.locked_by_name ? `Verrouillé par ${termStatus.locked_by_name}` : ""}
-          {termStatus.locked_at ? ` · ${new Date(termStatus.locked_at).toLocaleDateString("fr-FR")}` : ""}
-          {" · "}Pour modifier, déverrouillez dans <strong>Gestion Trimestres</strong>.
-        </p>
-      </div>
-    </div>
-  );
-};
-
-/* ── STYLED SELECT ── */
-const Sel = ({ icon: Icon, children, value, onChange, disabled }) => {
-  const { dark } = useTheme();
-  const T = dark ? DARK : LIGHT;
-  const [focused, setFocused] = useState(false);
-  return (
-    <div style={{ position:"relative" }}>
+    <div style={{ position: "relative" }}>
       {Icon && (
-        <span style={{
-          position:"absolute", left:11, top:"50%", transform:"translateY(-50%)",
-          pointerEvents:"none", zIndex:1,
-          color: focused ? COL.from : T.textMuted, transition:"color .15s",
-        }}>
-          <Icon style={{ width:12,height:12 }} />
-        </span>
+        <Icon style={{
+          position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",
+          width: 12, height: 12, color: foc ? COL.from : T.textMuted,
+          pointerEvents: "none", zIndex: 1, transition: "color .15s",
+        }} />
       )}
       <select value={value} onChange={onChange} disabled={disabled}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
+        onFocus={() => setFoc(true)} onBlur={() => setFoc(false)}
         style={{
-          width:"100%", appearance:"none",
-          paddingLeft: Icon ? 30 : 12, paddingRight:12,
-          paddingTop:8, paddingBottom:8,
-          fontSize:12, borderRadius:10, outline:"none", transition:"all .15s",
-          background:T.inputBg, color: value ? T.textPrimary : T.textMuted,
-          border:`1.5px solid ${focused ? COL.from : T.inputBorder}`,
-          boxShadow: focused ? `0 0 0 3px ${COL.from}22` : "none",
-          fontFamily:"'Plus Jakarta Sans', sans-serif",
-          opacity: disabled ? 0.5 : 1, cursor: disabled ? "not-allowed" : "pointer",
+          width: "100%", appearance: "none",
+          paddingLeft: Icon ? 30 : 12, paddingRight: 26, paddingTop: 9, paddingBottom: 9,
+          fontSize: 12, fontWeight: 600, borderRadius: 10, outline: "none",
+          background: T.inputBg, color: value ? T.textPrimary : T.textMuted,
+          border: `1.5px solid ${foc ? COL.from : T.inputBorder}`,
+          boxShadow: foc ? `0 0 0 3px ${COL.from}20` : "none",
+          cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? .5 : 1,
+          transition: "all .15s",
         }}>
         {children}
       </select>
+      <FaChevronDown style={{
+        position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+        width: 9, height: 9, color: T.textMuted, pointerEvents: "none",
+      }} />
     </div>
   );
-};
+}
 
-/* ── GRADE INPUT ── */
-const GradeInput = ({ label, accent, value, onChange }) => {
-  const { dark } = useTheme();
-  const T = dark ? DARK : LIGHT;
-  const [focused, setFocused] = useState(false);
-  const hasError = value !== "" && value !== null && value !== undefined
-    && (isNaN(parseFloat(value)) || parseFloat(value) < 0 || parseFloat(value) > 20);
+/* ─── Grade Input ────────────────────────────────────────────────────────── */
+function GradeInput({ label, accent, value, onChange, disabled }) {
+  const { dark } = useTheme(); const T = dark ? DARK : LIGHT;
+  const [foc, setFoc] = useState(false);
+  const n    = parseFloat(String(value).replace(",", "."));
+  const err  = value !== "" && value !== null && !isNaN(n) && (n < 0 || n > 20);
+  const col  = !isNaN(n) && value !== "" ? gradeColor(n) : null;
   return (
-    <div style={{ textAlign:"center" }}>
+    <div style={{ textAlign: "center" }}>
       <p style={{
-        fontSize:9, fontWeight:800, textTransform:"uppercase",
-        letterSpacing:"0.08em", color: accent || T.textMuted, marginBottom:4,
+        fontSize: 9, fontWeight: 800, textTransform: "uppercase",
+        letterSpacing: ".08em", color: accent || T.textMuted, marginBottom: 4,
       }}>{label}</p>
       <input
-        type="text" inputMode="decimal" pattern="[0-9.]*"
-        value={value ?? ""} placeholder="—"
-        onChange={onChange}
-        onWheel={(e) => e.currentTarget.blur()}
-        onFocus={(e) => { setFocused(true); e.currentTarget.select(); }}
-        onBlur={() => setFocused(false)}
+        type="text" inputMode="decimal" value={value ?? ""} placeholder="—"
+        onChange={onChange} disabled={disabled}
+        onFocus={e => { setFoc(true); e.target.select(); }}
+        onBlur={() => setFoc(false)}
         style={{
-          width:"100%", textAlign:"center", boxSizing:"border-box",
-          padding:"8px 4px", fontSize:14, fontWeight:700, borderRadius:8, outline:"none",
-          background: hasError ? (dark?"rgba(239,68,68,0.12)":"#fef2f2") : T.inputBg,
-          color: hasError ? "#ef4444" : T.textPrimary,
-          border:`1.5px solid ${hasError?"#ef4444":focused?(accent||COL.from):T.inputBorder}`,
-          boxShadow: focused && !hasError ? `0 0 0 3px ${(accent||COL.from)}22` : "none",
-          transition:"all .15s", fontFamily:"'Plus Jakarta Sans', sans-serif",
+          width: "100%", textAlign: "center", boxSizing: "border-box",
+          padding: "8px 4px", fontSize: 15, fontWeight: 800, borderRadius: 9,
+          outline: "none", transition: "all .15s",
+          background: err ? "#fef2f2" : (foc ? T.cardBg : T.inputBg),
+          color: err ? "#ef4444" : (col || T.textPrimary),
+          border: `1.5px solid ${err ? "#ef4444" : (foc ? (accent || COL.from) : T.inputBorder)}`,
+          boxShadow: foc && !err ? `0 0 0 3px ${(accent || COL.from)}20` : "none",
+          cursor: disabled ? "not-allowed" : "text",
+          opacity: disabled ? .5 : 1,
         }}
       />
     </div>
   );
-};
+}
 
-/* ── GRADE BADGE ── */
-const GradeBadge = ({ label, value, accent }) => {
-  const { dark } = useTheme();
-  const T = dark ? DARK : LIGHT;
-  const num = parseFloat(value);
-  const hasVal = !isNaN(num) && value !== "" && value !== null && value !== undefined;
-  let bg, color, border;
-  if (!hasVal) { bg = T.inputBg; color = T.textMuted; border = T.divider; }
-  else if (num < 10) { bg = dark?"rgba(239,68,68,0.12)":"#fef2f2"; color="#ef4444"; border="#fecaca"; }
-  else if (num >= 16) { bg = dark?"rgba(16,185,129,0.12)":"#ecfdf5"; color=COL.from; border=`${COL.from}55`; }
-  else { bg = T.cardBg; color = T.textPrimary; border = T.cardBorder; }
+/* ─── Grade Badge (lecture) ──────────────────────────────────────────────── */
+function GradeBadge({ label, value, accent, T }) {
+  const n = parseFloat(value);
+  const v = !isNaN(n) && value !== "" && value !== null && value !== undefined;
+  const col = v ? gradeColor(n) : null;
   return (
-    <div style={{ textAlign:"center" }}>
-      <p style={{ fontSize:8, fontWeight:800, textTransform:"uppercase",
-        letterSpacing:"0.07em", color: accent || T.textMuted, marginBottom:3 }}>{label}</p>
+    <div style={{ textAlign: "center", minWidth: 36 }}>
+      <p style={{
+        fontSize: 8, fontWeight: 800, textTransform: "uppercase",
+        letterSpacing: ".07em", color: accent || T.textMuted, marginBottom: 3,
+      }}>{label}</p>
       <div style={{
-        width:38, height:34, display:"flex", alignItems:"center", justifyContent:"center",
-        borderRadius:8, background:bg, border:`1.5px solid ${border}`,
-        fontSize:13, fontWeight:800, color, transition:"all .15s",
+        height: 32, display: "flex", alignItems: "center", justifyContent: "center",
+        borderRadius: 8, fontSize: 13, fontWeight: 800,
+        background: v ? (col ? `${col}14` : T.cardBg) : T.inputBg,
+        color: v ? (col || T.textPrimary) : T.textMuted,
+        border: `1.5px solid ${v ? (col ? `${col}44` : T.cardBorder) : T.divider}`,
+        padding: "0 6px",
       }}>
-        {hasVal ? num : "—"}
+        {v ? n : "—"}
       </div>
     </div>
   );
-};
+}
 
-/* ── GRADE CARD ── */
-const GradeCard = ({ grade, onEdit, onDelete, animDelay, isLocked }) => {
-  const { dark } = useTheme();
-  const T = dark ? DARK : LIGHT;
+/* ─── Grade Card ─────────────────────────────────────────────────────────── */
+function GradeCard({ grade, onEdit, onDelete, animDelay, isLocked, T, dark }) {
   const [hov, setHov] = useState(false);
-  const avg = parseFloat(grade.average_subject);
-  const hasAvg = !isNaN(avg);
+  const avg     = parseFloat(grade.average_subject);
+  const hasAvg  = !isNaN(avg);
   const passing = hasAvg && avg >= 10;
-  const termColor = TERM_COLORS[grade.term] || TERM_COLORS.T1;
-  const gradientPair = avatarGradient(`${grade.student_firstname||""}${grade.student_lastname||""}`);
-  const [avatarFrom, avatarTo] = Array.isArray(gradientPair) ? gradientPair : ["#6366f1","#8b5cf6"];
+  const tc      = TERM_COLORS[grade.term] ?? TERM_COLORS.T1;
+  const gp      = avatarGradient(`${grade.student_firstname ?? ""}${grade.student_lastname ?? ""}`);
+  const [af, at] = Array.isArray(gp) ? gp : [COL.from, COL.to];
 
   return (
     <div
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
       style={{
-        borderRadius:16, overflow:"hidden", transition:"all .2s",
-        background:T.cardBg,
-        border:`1.5px solid ${hov ? COL.from+"55" : T.cardBorder}`,
+        borderRadius: 16, overflow: "hidden",
+        background: T.cardBg,
+        border: `1.5px solid ${hov ? `${COL.from}66` : T.cardBorder}`,
         boxShadow: hov ? T.cardShadowHov : T.cardShadow,
         transform: hov ? "translateY(-2px)" : "translateY(0)",
-        animation:`fadeUp .3s ease-out ${animDelay}ms both`,
-        display:"flex", flexDirection:"column",
+        transition: "all .2s",
+        animation: `fadeUp .3s ease-out ${animDelay ?? 0}ms both`,
+        display: "flex", flexDirection: "column",
       }}>
-      <div style={{ height:3, background:`linear-gradient(90deg,${termColor.from},${termColor.to})` }} />
+      <div style={{ height: 3, background: `linear-gradient(90deg,${tc.from},${tc.to})` }} />
 
-      <div style={{ padding:"12px 14px 8px", display:"flex", alignItems:"flex-start", gap:10 }}>
+      {/* Header carte */}
+      <div style={{ padding: "12px 14px 10px", display: "flex", alignItems: "flex-start", gap: 10 }}>
         <div style={{
-          width:36, height:36, borderRadius:10, flexShrink:0,
-          display:"flex", alignItems:"center", justifyContent:"center",
-          fontSize:13, fontWeight:900, color:"#fff",
-          background:`linear-gradient(135deg,${avatarFrom},${avatarTo})`,
-          boxShadow:`0 3px 8px ${avatarFrom}44`,
+          width: 38, height: 38, borderRadius: 11, flexShrink: 0,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 14, fontWeight: 900, color: "#fff",
+          background: `linear-gradient(135deg,${af},${at})`,
+          boxShadow: `0 3px 8px ${af}44`,
         }}>
           {((grade.student_firstname || "?")[0] || "?").toUpperCase()}
         </div>
-        <div style={{ flex:1, minWidth:0 }}>
-          <p style={{ fontSize:13, fontWeight:800, color:T.textPrimary, lineHeight:1.2,
-            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-            {grade.student_firstname} {grade.student_lastname}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{
+            fontSize: 13, fontWeight: 800, color: T.textPrimary,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            {grade.student_lastname} {grade.student_firstname}
           </p>
-          <p style={{ fontSize:10, color:T.textMuted, marginTop:2, fontWeight:600,
-            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-            {grade.student_class && <span>{grade.student_class} · </span>}
+          <p style={{
+            fontSize: 10, color: T.textMuted, marginTop: 1, fontWeight: 500,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
             {grade.subject_name}
+            {grade.student_class && (
+              <span style={{ opacity: .7 }}> · {grade.student_class}</span>
+            )}
           </p>
         </div>
-        <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-          {isLocked && <FaLock style={{ width:9,height:9,color:"#f59e0b" }} />}
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          {isLocked && <FaLock style={{ width: 8, height: 8, color: "#f59e0b" }} />}
           <span style={{
-            flexShrink:0, padding:"2px 8px", borderRadius:999, fontSize:10, fontWeight:800,
-            background:`linear-gradient(135deg,${termColor.from}22,${termColor.to}11)`,
-            color:termColor.from, border:`1px solid ${termColor.from}44`,
+            padding: "2px 9px", borderRadius: 999, fontSize: 10, fontWeight: 800,
+            background: `${tc.from}18`, color: tc.from,
+            border: `1px solid ${tc.from}33`,
           }}>{grade.term}</span>
         </div>
       </div>
 
+      {/* Notes */}
       <div style={{
-        padding:"10px 14px",
-        background: dark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)",
-        borderTop:`1px solid ${T.divider}`, borderBottom:`1px solid ${T.divider}`,
+        padding: "10px 14px",
+        background: dark ? "rgba(255,255,255,.025)" : "rgba(0,0,0,.018)",
+        borderTop: `1px solid ${T.divider}`, borderBottom: `1px solid ${T.divider}`,
       }}>
-        <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"center" }}>
-          <div style={{ display:"flex", gap:5 }}>
-            <GradeBadge label="I.1" value={grade.interrogation1} accent="#6366f1" />
-            <GradeBadge label="I.2" value={grade.interrogation2} accent="#6366f1" />
-            <GradeBadge label="I.3" value={grade.interrogation3} accent="#6366f1" />
+        <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
+          <div style={{ display: "flex", gap: 4 }}>
+            {["interrogation1", "interrogation2", "interrogation3"].map((f, i) => (
+              <GradeBadge key={f} label={`I${i + 1}`} value={grade[f]} accent="#6366f1" T={T} />
+            ))}
           </div>
-          <div style={{ width:1, height:44, background:T.divider, flexShrink:0 }} />
-          <div style={{ display:"flex", gap:5 }}>
-            <GradeBadge label="D.1" value={grade.devoir1} accent="#f97316" />
-            <GradeBadge label="D.2" value={grade.devoir2} accent="#f97316" />
+          <div style={{ width: 1, height: 40, background: T.divider, flexShrink: 0 }} />
+          <div style={{ display: "flex", gap: 4 }}>
+            {["devoir1", "devoir2"].map((f, i) => (
+              <GradeBadge key={f} label={`D${i + 1}`} value={grade[f]} accent="#f97316" T={T} />
+            ))}
           </div>
         </div>
       </div>
 
-      <div style={{ padding:"10px 14px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+      {/* Footer : moyenne + actions */}
+      <div style={{
+        padding: "10px 14px", display: "flex", alignItems: "center",
+        justifyContent: "space-between", gap: 10,
+      }}>
         <div>
-          <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
-            letterSpacing:"0.07em", color:T.textMuted, marginBottom:2 }}>Moyenne</p>
-          <div style={{ display:"flex", alignItems:"baseline", gap:4 }}>
+          <p style={{
+            fontSize: 9, fontWeight: 800, textTransform: "uppercase",
+            letterSpacing: ".07em", color: T.textMuted, marginBottom: 2,
+          }}>Moyenne mat.</p>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 3 }}>
             <span style={{
-              fontSize:22, fontWeight:900, lineHeight:1,
+              fontSize: 22, fontWeight: 900, lineHeight: 1,
               color: !hasAvg ? T.textMuted : passing ? COL.from : "#ef4444",
             }}>
               {hasAvg ? avg.toFixed(2) : "—"}
             </span>
-            {hasAvg && <span style={{ fontSize:10, color:T.textMuted }}>/20</span>}
+            {hasAvg && <span style={{ fontSize: 10, color: T.textMuted }}>/20</span>}
           </div>
         </div>
 
         {hasAvg && (
-          <div style={{ flex:1, margin:"0 16px" }}>
+          <div style={{ flex: 1, maxWidth: 100 }}>
             <div style={{
-              height:6, borderRadius:999, overflow:"hidden",
-              background: dark ? "rgba(255,255,255,0.06)" : "#f1f5f9",
+              height: 5, borderRadius: 999, overflow: "hidden",
+              background: dark ? "rgba(255,255,255,.07)" : "#f1f5f9",
             }}>
               <div style={{
-                width:`${Math.min(100, avg / 20 * 100)}%`,
-                height:"100%", borderRadius:999, transition:"width .4s ease-out",
+                width: `${Math.min(100, avg / 20 * 100)}%`, height: "100%",
+                borderRadius: 999, transition: "width .4s ease-out",
                 background: passing
                   ? `linear-gradient(90deg,${COL.from},${COL.to})`
                   : "linear-gradient(90deg,#ef4444,#f97316)",
               }} />
             </div>
-            <p style={{ fontSize:9, color:T.textMuted, marginTop:3, textAlign:"center" }}>
-              {passing ? "Validé" : "En dessous du seuil"}
+            <p style={{ fontSize: 9, color: T.textMuted, marginTop: 3, textAlign: "center" }}>
+              {passing ? "✓ Validé" : "✗ Insuffisant"}
             </p>
           </div>
         )}
 
         <div style={{
-          display:"flex", gap:4,
-          opacity: isLocked ? 0.25 : (hov ? 1 : 0.3),
-          transition:"opacity .15s",
+          display: "flex", gap: 4,
+          opacity: isLocked ? .2 : (hov ? 1 : .35),
+          transition: "opacity .15s",
         }}>
-          <button
-            onClick={() => onEdit(grade)}
-            disabled={isLocked}
+          <button onClick={() => onEdit(grade)} disabled={isLocked} title="Modifier"
             style={{
-              width:30, height:30, borderRadius:8, border:"none",
+              width: 30, height: 30, borderRadius: 8, border: "none",
               cursor: isLocked ? "not-allowed" : "pointer",
-              display:"flex", alignItems:"center", justifyContent:"center",
-              background: dark?"#2a1a06":"#fffbeb", color:"#f59e0b", transition:"background .12s",
-            }}
-            onMouseEnter={(e) => !isLocked && (e.currentTarget.style.background="#f59e0b22")}
-            onMouseLeave={(e) => !isLocked && (e.currentTarget.style.background=dark?"#2a1a06":"#fffbeb")}>
-            <FaEdit style={{ width:11,height:11 }} />
+              background: dark ? "#2a1a06" : "#fffbeb", color: "#f59e0b",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+            <FaEdit style={{ width: 11, height: 11 }} />
           </button>
-          <button
-            onClick={() => onDelete(grade.id)}
-            disabled={isLocked}
+          <button onClick={() => onDelete(grade.id)} disabled={isLocked} title="Supprimer"
             style={{
-              width:30, height:30, borderRadius:8, border:"none",
+              width: 30, height: 30, borderRadius: 8, border: "none",
               cursor: isLocked ? "not-allowed" : "pointer",
-              display:"flex", alignItems:"center", justifyContent:"center",
-              background: dark?"#2a0a0a":"#fef2f2", color:"#ef4444", transition:"background .12s",
-            }}
-            onMouseEnter={(e) => !isLocked && (e.currentTarget.style.background="#ef444422")}
-            onMouseLeave={(e) => !isLocked && (e.currentTarget.style.background=dark?"#2a0a0a":"#fef2f2")}>
-            <FaTrash style={{ width:11,height:11 }} />
+              background: dark ? "#2a0a0a" : "#fef2f2", color: "#ef4444",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+            <FaTrash style={{ width: 11, height: 11 }} />
           </button>
         </div>
       </div>
     </div>
   );
-};
+}
 
-/* ── PAGE PRINCIPALE ── */
-const GradesInner = () => {
+/* ═══════════════════════════════════════════════════════════════════════════
+   PAGE PRINCIPALE
+═══════════════════════════════════════════════════════════════════════════ */
+function GradesInner() {
   const { dark } = useTheme();
   const T = dark ? DARK : LIGHT;
 
   const containerRef = useRef(null);
-  const [containerW, setContainerW] = useState(1200);
+  const [cw, setCw] = useState(1200);
   useEffect(() => {
     if (!containerRef.current) return;
-    const obs = new ResizeObserver(([entry]) => setContainerW(entry.contentRect.width));
-    obs.observe(containerRef.current);
-    return () => obs.disconnect();
+    const ro = new ResizeObserver(([e]) => setCw(e.contentRect.width));
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
   }, []);
-  const isNarrow = containerW < 860;
+  const narrow = cw < 860;
 
-  const [classes,         setClasses]         = useState([]);
-  const [subjects,        setSubjects]        = useState([]);
-  const [students,        setStudents]        = useState([]);
-  const [filters,         setFilters]         = useState({ school_class:"", student:"", subject:"", term:"" });
+  /* ── Années ── */
+  const [allYears,     setAllYears]     = useState([]);
+  const [selectedYear, setSelectedYear] = useState(null);
+  const [loadingYears, setLoadingYears] = useState(true);
+  const yearIsClosed = selectedYear?.is_closed ?? false;
 
-  // Notes existantes de l'élève sélectionné pour la classe + trimestre en cours
-  // { [subject_id]: Grade } — mis à jour à chaque changement d'élève/classe/terme
-  const [studentGradesMap,  setStudentGradesMap]  = useState({});
-  const [loadingStudentGrades, setLoadingStudentGrades] = useState(false);
-  const [search,          setSearch]          = useState("");
-  const [grades,          setGrades]          = useState([]);
-  const [loadingGrades,   setLoadingGrades]   = useState(false);
-  const [loadingStudents, setLoadingStudents] = useState(false);
-  const [loadingRefs,     setLoadingRefs]     = useState(true);
-  const [termStatus,      setTermStatus]      = useState(null);
+  /* ── Données de référence ── */
+  const [classes,        setClasses]        = useState([]);
+  const [subjects,       setSubjects]       = useState([]);
+  const [students,       setStudents]       = useState([]);
+  const [loadingStudents,setLoadingStudents] = useState(false);
+  const [loadingRefs,    setLoadingRefs]    = useState(true);
 
-  const EMPTY_FORM = { id:null, student_id:"", subject_id:"", term:"T1",
-    interrogation1:"", interrogation2:"", interrogation3:"", devoir1:"", devoir2:"" };
-  const [form,    setForm]    = useState(EMPTY_FORM);
-  const [saving,  setSaving]  = useState(false);
-  const [msg,     setMsg]     = useState(null);
-  const [confirm, setConfirm] = useState({ open:false, id:null });
+  /* ── Filtres (query params envoyés tels quels au backend) ── */
+  const [filters, setFilters] = useState({
+    school_class: "", student: "", subject: "", term: "",
+  });
+  const [search, setSearch] = useState("");
+  const setF = (k, v) => setFilters(p => ({ ...p, [k]: v }));
 
+  /* ── Notes ── */
+  const [grades,       setGrades]       = useState([]);
+  const [loadingGrades,setLoadingGrades] = useState(false);
+
+  /* ── TermStatus ── */
+  const [termStatus, setTermStatus] = useState(null);
   const isLocked = termStatus?.status === "locked" || termStatus?.status === "published";
-  const hasClassAndTerm = !!filters.school_class && !!filters.term;
-  const statusMeta = termStatus ? (STATUS_META[termStatus.status] || STATUS_META.draft) : null;
+  const statusMeta = termStatus ? (STATUS_META[termStatus.status] ?? STATUS_META.draft) : null;
 
-  /* ── fetchTermStatus ── */
-  const fetchTermStatus = useCallback(async (cls, term) => {
+  /* ── Formulaire ── */
+  const [form,      setForm]      = useState(EMPTY_FORM);
+  const [panelMode, setPanelMode] = useState("read"); // "read" | "edit"
+  const [saving,    setSaving]    = useState(false);
+  const [confirm,   setConfirm]   = useState({ open: false, id: null });
+  const [msg,       setMsg]       = useState(null);
+  const isEditing = !!form.id;
+
+  // Grade existant correspondant aux sélections du panneau
+  const currentGrade = useMemo(() => {
+    if (!form.student_id || !form.subject_id || !form.term) return null;
+    return grades.find(g =>
+      String(g.student_id)  === String(form.student_id) &&
+      String(g.subject_id)  === String(form.subject_id) &&
+      g.term                === form.term
+    ) ?? null;
+  }, [grades, form.student_id, form.subject_id, form.term]);
+
+  // Quand currentGrade change → pré-remplir le formulaire + passer en lecture
+  useEffect(() => {
+    if (!currentGrade) return;
+    setForm(prev => ({
+      ...prev,
+      id:             currentGrade.id,
+      interrogation1: currentGrade.interrogation1 ?? "",
+      interrogation2: currentGrade.interrogation2 ?? "",
+      interrogation3: currentGrade.interrogation3 ?? "",
+      devoir1:        currentGrade.devoir1        ?? "",
+      devoir2:        currentGrade.devoir2        ?? "",
+    }));
+    setPanelMode("read");
+  }, [currentGrade?.id]); // eslint-disable-line
+
+  // Si on change élève/matière/trimestre → reset mode
+  useEffect(() => {
+    setPanelMode("read");
+  }, [form.student_id, form.subject_id, form.term]);
+
+  /* ── Stats ── */
+  const stats = useMemo(() => {
+    const avgs = grades.map(g => parseFloat(g.average_subject)).filter(n => !isNaN(n));
+    if (!avgs.length) return null;
+    const mean    = avgs.reduce((a, b) => a + b, 0) / avgs.length;
+    const passing = avgs.filter(n => n >= 10).length;
+    return { mean: mean.toFixed(2), passing, total: avgs.length };
+  }, [grades]);
+
+  /* ─────────────────────── CHARGEMENTS ─────────────────────────────────── */
+
+  // 1. Années au montage
+  useEffect(() => {
+    (async () => {
+      setLoadingYears(true);
+      try {
+        const d   = await fetchData("/academics/school-years/");
+        const arr = (Array.isArray(d) ? d : d?.results ?? [])
+          .sort((a, b) => b.label.localeCompare(a.label));
+        setAllYears(arr);
+        setSelectedYear(arr.find(y => y.is_active && !y.is_closed) ?? arr[0] ?? null);
+      } catch (e) { handleApiError(e); }
+      finally { setLoadingYears(false); }
+    })();
+  }, []);
+
+  // 2. Classes + matières au montage
+  useEffect(() => {
+    setLoadingRefs(true);
+    Promise.all([
+      fetchData("/academics/school-classes/").catch(() => []),
+      fetchData("/academics/subjects/").catch(() => []),
+    ]).then(([cls, sub]) => {
+      setClasses(Array.isArray(cls) ? cls : cls?.results ?? []);
+      setSubjects(Array.isArray(sub) ? sub : sub?.results ?? []);
+    }).finally(() => setLoadingRefs(false));
+  }, []);
+
+  // 3. Élèves quand la classe change
+  useEffect(() => {
+    const cls = filters.school_class;
+    setStudents([]);
+    setFilters(p => p.student ? { ...p, student: "" } : p);
+    if (!cls) return;
+    let alive = true;
+    setLoadingStudents(true);
+    fetchData(`/core/admin/students/by-class/${cls}/`)
+      .then(d => { if (alive) setStudents(Array.isArray(d) ? d : d?.results ?? []); })
+      .catch(() => {})
+      .finally(() => { if (alive) setLoadingStudents(false); });
+    return () => { alive = false; };
+  }, [filters.school_class]);
+
+  // 4. TermStatus quand classe + trimestre changent
+  const fetchTermStatus = useCallback(async (cls, term, yearId) => {
     if (!cls || !term) { setTermStatus(null); return; }
     try {
-      const data = await fetchData(`/academics/term-status/?school_class=${cls}&term=${term}`);
-      const list = Array.isArray(data) ? data : (data?.results ?? []);
-      setTermStatus(list.length ? list[0] : null);
+      const q = buildQuery({ school_class: cls, term, school_year: yearId });
+      const d = await fetchData(`/academics/term-status/${q}`);
+      const l = Array.isArray(d) ? d : d?.results ?? [];
+      setTermStatus(l[0] ?? null);
     } catch { setTermStatus(null); }
   }, []);
 
   useEffect(() => {
-    fetchTermStatus(filters.school_class, filters.term);
-  }, [filters.school_class, filters.term, fetchTermStatus]);
+    fetchTermStatus(filters.school_class, filters.term, selectedYear?.id);
+  }, [filters.school_class, filters.term, selectedYear, fetchTermStatus]);
 
-  /* ── Chargement classes + matières ── */
-  useEffect(() => {
-    (async () => {
-      setLoadingRefs(true);
-      try {
-        const [cls, sub] = await Promise.all([
-          fetchData("/academics/school-classes/").catch(() => []),
-          fetchData("/academics/subjects/").catch(() => []),
-        ]);
-        setClasses(Array.isArray(cls) ? cls : (cls?.results ?? []));
-        setSubjects(Array.isArray(sub) ? sub : (sub?.results ?? []));
-      } catch { setMsg({ type:"error", text:"Impossible de charger les données." }); }
-      finally  { setLoadingRefs(false); }
-    })();
-  }, []);
-
-  /* ── Élèves selon classe ── */
-  useEffect(() => {
-    const cls = filters.school_class;
-    setStudents([]);
-    setFilters((p) => p.student === "" ? p : { ...p, student:"" });
-    if (!cls) return;
-    let active = true;
-    setLoadingStudents(true);
-    fetchData(`/core/admin/students/by-class/${cls}/`)
-      .then((d) => { if (active) setStudents(Array.isArray(d) ? d : (d?.results ?? [])); })
-      .catch(() => {})
-      .finally(() => { if (active) setLoadingStudents(false); });
-    return () => { active = false; };
-  }, [filters.school_class]);
-
-  /* ── Fetch notes ── */
-  const fetchGrades = useCallback(async (overrideFilters) => {
+  // 5. Fetch notes (déclenché manuellement via bouton "Filtrer" ou à chaque fetch)
+  const fetchGrades = useCallback(async () => {
+    // Garde : exiger au moins classe OU élève pour éviter un fetch de masse
+    if (!filters.school_class && !filters.student && !search.trim()) {
+      setGrades([]); return;
+    }
     setLoadingGrades(true);
     try {
-      const f = overrideFilters ?? filters;
       const q = buildQuery({
-        school_class: f.school_class || undefined,
-        student_id:   f.student      || undefined,
-        subject:      f.subject      || undefined,
-        term:         f.term         || undefined,
-        student_name: search.trim()  || undefined,
+        school_class: filters.school_class  || undefined,
+        student_id:   filters.student       || undefined,
+        subject:      filters.subject       || undefined,
+        term:         filters.term          || undefined,
+        student_name: search.trim()         || undefined,
+        school_year:  selectedYear?.id      || undefined,
       });
-      const data = await fetchData(`/academics/grades/${q}`);
-      setGrades(Array.isArray(data) ? data : (data?.results ?? []));
+      const d = await fetchData(`/academics/grades/${q}`);
+      setGrades(Array.isArray(d) ? d : d?.results ?? []);
     } catch (err) {
-      if (err?.status === 423) {
-        fetchTermStatus(filters.school_class, filters.term);
-        setMsg({ type:"error", text:"Ce trimestre est verrouillé." });
-      } else {
-        setMsg({ type:"error", text:"Erreur lors de la récupération des notes." });
-      }
+      handleApiError(err);
+      if (err?.status === 423) fetchTermStatus(filters.school_class, filters.term, selectedYear?.id);
+      setMsg({ type: "error", text: extractErrorMsg(err) });
     } finally { setLoadingGrades(false); }
-  }, [filters, search, fetchTermStatus]);
+  }, [filters, search, selectedYear, fetchTermStatus]);
 
-  // Fetch déclenché sur changement de classe ET trimestre (garde interne dans fetchGrades)
-  useEffect(() => { fetchGrades(); }, [filters.school_class, filters.term]); // eslint-disable-line
-
-  /* ── Charge les notes existantes de l'élève sélectionné ── */
-  const fetchStudentGrades = useCallback(async (studentId, classId, term) => {
-    if (!studentId || !classId || !term) {
-      setStudentGradesMap({});
-      return;
-    }
-    setLoadingStudentGrades(true);
-    try {
-      const q = buildQuery({ student_id: studentId, school_class: classId, term });
-      const data = await fetchData(`/academics/grades/${q}`);
-      const list = Array.isArray(data) ? data : (data?.results ?? []);
-      const map = {};
-      list.forEach(g => {
-        const sid = g.subject?.id ?? g.subject_id;
-        if (sid != null) map[String(sid)] = g;
-      });
-      setStudentGradesMap(map);
-    } catch {
-      setStudentGradesMap({});
-    } finally {
-      setLoadingStudentGrades(false);
-    }
-  }, []);
-
+  // Sync student_id dans le formulaire quand le filtre élève change
   useEffect(() => {
-    fetchStudentGrades(filters.student, filters.school_class, filters.term);
-  }, [filters.student, filters.school_class, filters.term, fetchStudentGrades]);
+    if (filters.student) setForm(p => ({ ...p, student_id: filters.student }));
+  }, [filters.student]);
 
-  /* ── Submit ── */
+  /* ─────────────────────── SOUMISSION ──────────────────────────────────── */
+
   const handleSubmit = async () => {
-    if (isLocked) {
-      setMsg({ type:"error", text:"Ce trimestre est verrouillé — modifications impossibles." });
+    if (isLocked || yearIsClosed) {
+      setMsg({ type: "error", text: "Trimestre verrouillé ou année clôturée." });
       return;
     }
     if (!form.student_id || !form.subject_id) {
-      setMsg({ type:"error", text:"Veuillez sélectionner un élève et une matière." });
+      setMsg({ type: "error", text: "Sélectionnez un élève et une matière." });
       return;
     }
-    setSaving(true);
 
-    const toNum = (v) => (v === "" || v === null || v === undefined) ? null : Number(v);
+    const toNum = v => (v === "" || v === null || v === undefined) ? null : Number(v);
 
-    // Récupérer le grade existant pour cet élève/matière (chargé au préalable)
-    const existingGrade = studentGradesMap[String(form.subject_id)] ?? null;
-
-    // Payload bulk_upsert — on fusionne les valeurs existantes avec les nouvelles.
-    // Si le formulaire a été pré-rempli, les champs non modifiés conservent leur valeur.
-    // Si id est fourni, bulk_upsert met à jour uniquement les champs inclus dans le payload.
+    // Construire le payload bulk_upsert.
+    // N'inclure QUE les champs de note NON vides :
+    //   - Évite d'écraser les valeurs existantes par null
+    //   - Permet de ne mettre à jour qu'un seul champ à la fois
     const line = {
-      ...(existingGrade?.id ? { id: existingGrade.id } : {}),
-      student_id: form.student_id,         // PK entier résolu via slug_field="id"
-      subject_id: parseInt(form.subject_id, 10),
-      term:       form.term || filters.term || "T1",
-      interrogation1: toNum(form.interrogation1),
-      interrogation2: toNum(form.interrogation2),
-      interrogation3: toNum(form.interrogation3),
-      devoir1:        toNum(form.devoir1),
-      devoir2:        toNum(form.devoir2),
+      ...(form.id ? { id: form.id } : {}),
+      student_id: String(form.student_id),
+      subject_id: Number(form.subject_id),
+      term:       form.term || "T1",
     };
+    let hasAtLeastOne = false;
+    NOTE_FIELDS.forEach(({ key }) => {
+      const raw = form[key];
+      if (raw !== "" && raw !== null && raw !== undefined) {
+        const n = toNum(raw);
+        if (n !== null) { line[key] = n; hasAtLeastOne = true; }
+      }
+    });
 
+    if (!hasAtLeastOne && !form.id) {
+      setMsg({ type: "error", text: "Saisissez au moins une note." });
+      return;
+    }
+
+    setSaving(true);
     try {
-      const result = await postData("/academics/grades/bulk_upsert/", [line]);
-      const first  = result?.results?.[0];
-      if (first?.status === "error") {
-        setMsg({ type:"error", text: typeof first.errors === "string"
-          ? first.errors
-          : JSON.stringify(first.errors) });
+      const data   = await postData("/academics/grades/bulk_upsert/", [line]);
+      const result = (Array.isArray(data?.results) ? data.results : [])[0];
+
+      if (result?.status === "error") {
+        const e = result.errors;
+        setMsg({ type: "error", text: typeof e === "string" ? e : JSON.stringify(e) });
       } else {
-        const op = first?.status === "created" ? "créée" : "mise à jour";
-        setMsg({ type:"success", text:`Note ${op} avec succès.` });
+        const op = result?.status === "created" ? "enregistrée" : "mise à jour";
+        setMsg({ type: "success", text: `Note ${op}.` });
         setForm(EMPTY_FORM);
-        // Rafraîchir la carte de l'élève et la liste globale
-        await Promise.all([
-          fetchStudentGrades(filters.student, filters.school_class, filters.term),
-          fetchGrades(),
-        ]);
+        await fetchGrades();
       }
     } catch (err) {
-      if (err?.status === 423) {
-        fetchTermStatus(filters.school_class, filters.term);
-        setMsg({ type:"error", text:"Ce trimestre est verrouillé — opération refusée." });
-      } else {
-        const body   = err?.body;
-        const detail = typeof body === "string"
-          ? body
-          : body?.detail
-            || body?.non_field_errors?.[0]
-            || (body ? Object.entries(body).map(([k,v]) =>
-                `${k}: ${Array.isArray(v) ? v.join(", ") : v}`
-              ).join(" | ") : null)
-            || "Erreur lors de l'enregistrement.";
-        setMsg({ type:"error", text: detail });
-      }
+      handleApiError(err);
+      if (err?.status === 423) fetchTermStatus(filters.school_class, filters.term, selectedYear?.id);
+      setMsg({ type: "error", text: extractErrorMsg(err) });
     } finally { setSaving(false); }
   };
 
-  /* ── Edit ── */
-  const handleEdit = (g) => {
-    if (isLocked) {
-      setMsg({ type:"error", text:"Ce trimestre est verrouillé — modification impossible." });
+  /* ─────────────────────── EDIT / DELETE ───────────────────────────────── */
+
+  const handleEdit = g => {
+    if (isLocked || yearIsClosed) {
+      setMsg({ type: "error", text: "Modification impossible — trimestre verrouillé ou année clôturée." });
       return;
     }
     setForm({
-      id:g.id, student_id:g.student_id, subject_id:g.subject_id, term:g.term||"T1",
-      interrogation1:g.interrogation1??"", interrogation2:g.interrogation2??"",
-      interrogation3:g.interrogation3??"", devoir1:g.devoir1??"", devoir2:g.devoir2??"",
+      id:             g.id,
+      student_id:     g.student_id,
+      subject_id:     g.subject_id,
+      term:           g.term ?? "T1",
+      interrogation1: g.interrogation1 ?? "",
+      interrogation2: g.interrogation2 ?? "",
+      interrogation3: g.interrogation3 ?? "",
+      devoir1:        g.devoir1        ?? "",
+      devoir2:        g.devoir2        ?? "",
     });
+    setPanelMode("edit");
     if (g.student_class_id && String(filters.school_class) !== String(g.student_class_id))
-      setFilters((p) => ({ ...p, school_class: String(g.student_class_id) }));
-    window.scrollTo({ top:0, behavior:"smooth" });
+      setF("school_class", String(g.student_class_id));
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  /* ── Delete ── */
-  const handleDeleteRequest = (id) => {
-    if (isLocked) {
-      setMsg({ type:"error", text:"Ce trimestre est verrouillé — suppression impossible." });
-      return;
+  const handleDeleteRequest = id => {
+    if (isLocked || yearIsClosed) {
+      setMsg({ type: "error", text: "Suppression impossible." }); return;
     }
-    setConfirm({ open:true, id });
+    setConfirm({ open: true, id });
   };
+
   const handleDeleteConfirm = async () => {
     const id = confirm.id;
-    setConfirm({ open:false, id:null });
+    setConfirm({ open: false, id: null });
     try {
       await deleteData(`/academics/grades/${id}/`);
-      setMsg({ type:"success", text:"Note supprimée." });
+      setMsg({ type: "success", text: "Note supprimée." });
       await fetchGrades();
     } catch (err) {
-      if (err?.status === 423) {
-        fetchTermStatus(filters.school_class, filters.term);
-        setMsg({ type:"error", text:"Ce trimestre est verrouillé." });
-      } else {
-        setMsg({ type:"error", text:"Impossible de supprimer cette note." });
-      }
+      handleApiError(err);
+      setMsg({ type: "error", text: extractErrorMsg(err) });
     }
   };
 
-  const setF = (k, v) => setFilters((p) => ({ ...p, [k]: v }));
-  const isEditing = !!form.id;
-
-  const stats = useMemo(() => {
-    if (!grades.length) return null;
-    const avgs = grades.map((g) => parseFloat(g.average_subject)).filter((n) => !isNaN(n));
-    if (!avgs.length) return null;
-    const mean    = avgs.reduce((a, b) => a + b, 0) / avgs.length;
-    const passing = avgs.filter((n) => n >= 10).length;
-    return { mean: mean.toFixed(2), passing, total: avgs.length };
-  }, [grades]);
-
-  /* ══ RENDER ══ */
+  /* ─────────────────────── RENDU ─────────────────────────────────────────── */
   return (
     <div style={{
-      minHeight:"100vh", background:T.pageBg, transition:"background .3s",
-      fontFamily:"'Plus Jakarta Sans', sans-serif", paddingBottom:60,
+      minHeight: "100vh", background: T.pageBg, paddingBottom: 60,
+      fontFamily: "'Plus Jakarta Sans', sans-serif", transition: "background .3s",
     }}>
       <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
-      {/* HEADER */}
+      {/* ═══ HEADER ═══ */}
       <header style={{
-        position:"sticky", top:0, zIndex:40,
-        background:T.headerBg, backdropFilter:"blur(16px)",
-        borderBottom:`1px solid ${T.divider}`, transition:"all .3s",
+        position: "sticky", top: 0, zIndex: 40,
+        background: T.headerBg, backdropFilter: "blur(16px)",
+        borderBottom: `1px solid ${T.divider}`,
       }}>
         <div style={{
-          maxWidth:1200, margin:"0 auto", padding:"12px 24px",
-          display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap",
+          maxWidth: 1280, margin: "0 auto", padding: "11px 24px",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 12, flexWrap: "wrap",
         }}>
-          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          {/* Titre */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{
-              width:40, height:40, borderRadius:12, flexShrink:0,
-              display:"flex", alignItems:"center", justifyContent:"center",
-              background:`linear-gradient(135deg,${COL.from},${COL.to})`,
-              boxShadow:`0 6px 18px ${COL.shadow}`,
+              width: 38, height: 38, borderRadius: 11, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: `linear-gradient(135deg,${COL.from},${COL.to})`,
+              boxShadow: `0 5px 16px ${COL.shadow}`,
             }}>
-              <FaCalculator style={{ width:16,height:16,color:"#fff" }} />
+              <FaBookOpen style={{ width: 14, height: 14, color: "#fff" }} />
             </div>
             <div>
-              <h1 style={{ fontSize:17, fontWeight:900, color:T.textPrimary, letterSpacing:"-0.02em" }}>
+              <h1 style={{ fontSize: 16, fontWeight: 900, color: T.textPrimary, margin: 0 }}>
                 Gestion des Notes
               </h1>
-              <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:2 }}>
-                <p style={{ fontSize:11, color:T.textMuted }}>
-                  Saisie, consultation et suivi des évaluations par trimestre
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                <p style={{ fontSize: 10, color: T.textMuted, margin: 0 }}>
+                  Saisie et consultation des évaluations
                 </p>
-                {hasClassAndTerm && statusMeta && (
+                {statusMeta && filters.school_class && filters.term && (
                   <span style={{
-                    display:"inline-flex", alignItems:"center", gap:4,
-                    padding:"1px 8px", borderRadius:999, fontSize:9, fontWeight:800,
-                    background: statusMeta.bg, color:statusMeta.color,
-                    textTransform:"uppercase", letterSpacing:"0.06em",
+                    display: "inline-flex", alignItems: "center", gap: 3,
+                    padding: "1px 7px", borderRadius: 999, fontSize: 9, fontWeight: 800,
+                    background: statusMeta.bg, color: statusMeta.color,
+                    textTransform: "uppercase", letterSpacing: ".06em",
                   }}>
-                    <statusMeta.Icon style={{ width:8,height:8 }} />
+                    <statusMeta.Icon style={{ width: 7, height: 7 }} />
                     {statusMeta.label}
                   </span>
                 )}
               </div>
             </div>
           </div>
-          <DarkToggle />
+
+          {/* Droite : sélecteur d'année + dark toggle */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {!loadingYears && allYears.length > 0 && (
+              <div style={{ position: "relative", minWidth: 128 }}>
+                <select
+                  value={selectedYear?.id ?? ""}
+                  onChange={e => {
+                    const yr = allYears.find(y => String(y.id) === e.target.value) ?? null;
+                    setSelectedYear(yr);
+                    setGrades([]); setForm(EMPTY_FORM); setTermStatus(null);
+                  }}
+                  style={{
+                    appearance: "none", width: "100%",
+                    paddingLeft: 10, paddingRight: 24, paddingTop: 6, paddingBottom: 6,
+                    fontSize: 11, fontWeight: 700, borderRadius: 9, outline: "none",
+                    cursor: "pointer",
+                    background: yearIsClosed ? "#fef9f0" : `${COL.from}14`,
+                    color: yearIsClosed ? "#b45309" : COL.from,
+                    border: `1.5px solid ${yearIsClosed ? "#f59e0b44" : `${COL.from}40`}`,
+                  }}>
+                  {allYears.map(yr => (
+                    <option key={yr.id} value={yr.id}>
+                      {yr.label}{yr.is_active && !yr.is_closed ? " ✦" : yr.is_closed ? " ⊘" : ""}
+                    </option>
+                  ))}
+                </select>
+                <FaChevronDown style={{
+                  position: "absolute", right: 7, top: "50%", transform: "translateY(-50%)",
+                  width: 8, height: 8, pointerEvents: "none",
+                  color: yearIsClosed ? "#b45309" : COL.from,
+                }} />
+              </div>
+            )}
+            <DarkToggle />
+          </div>
         </div>
       </header>
 
-      <main ref={containerRef} style={{ maxWidth:1200, margin:"0 auto", padding:"20px 24px 0" }}>
+      <main ref={containerRef} style={{ maxWidth: 1280, margin: "0 auto", padding: "20px 24px 0" }}>
 
-        {/* Lock Banner */}
-        {hasClassAndTerm && <LockBanner termStatus={termStatus} />}
+        {/* Bannière année clôturée */}
+        {yearIsClosed && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 9,
+            padding: "10px 16px", borderRadius: 11, marginBottom: 14,
+            background: "#fef9f0", border: "1.5px solid #f59e0b33",
+          }}>
+            <FaHistory style={{ width: 13, height: 13, color: "#b45309", flexShrink: 0 }} />
+            <p style={{ fontSize: 12, fontWeight: 700, color: "#b45309" }}>
+              {selectedYear?.label} — année clôturée. Consultation uniquement.
+            </p>
+          </div>
+        )}
 
-        {/* FILTRES */}
+        {/* Bannière verrouillage */}
+        {!yearIsClosed && termStatus && termStatus.status !== "draft" && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 9,
+            padding: "10px 16px", borderRadius: 11, marginBottom: 14,
+            background: statusMeta.bg, border: `1.5px solid ${statusMeta.color}33`,
+          }}>
+            <statusMeta.Icon style={{ width: 13, height: 13, color: statusMeta.color, flexShrink: 0 }} />
+            <p style={{ fontSize: 12, fontWeight: 700, color: statusMeta.color }}>
+              Trimestre {statusMeta.label.toLowerCase()} — saisie désactivée.
+            </p>
+          </div>
+        )}
+
+        {/* ═══ FILTRES ═══ */}
         <div style={{
-          borderRadius:16, padding:"14px 18px", marginBottom:16,
-          background:T.cardBg, border:`1.5px solid ${T.cardBorder}`, boxShadow:T.cardShadow,
+          borderRadius: 16, padding: "14px 18px", marginBottom: 16,
+          background: T.cardBg, border: `1.5px solid ${T.cardBorder}`,
+          boxShadow: T.cardShadow,
         }}>
           <div style={{
-            display:"grid",
-            gridTemplateColumns: isNarrow ? "1fr 1fr" : "1fr 1fr 1fr 1fr 160px 100px",
-            gap:10, alignItems:"end",
+            display: "grid",
+            gridTemplateColumns: narrow ? "1fr 1fr" : "1fr 1fr 1fr 1fr 140px 90px",
+            gap: 10, alignItems: "end",
           }}>
             {/* Recherche */}
             <div>
-              <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
-                letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>Recherche</p>
-              <div style={{ position:"relative" }}>
+              <p style={{
+                fontSize: 9, fontWeight: 800, textTransform: "uppercase",
+                letterSpacing: ".08em", color: T.textMuted, marginBottom: 5,
+              }}>Recherche</p>
+              <div style={{ position: "relative" }}>
                 <FaSearch style={{
-                  position:"absolute", left:10, top:"50%", transform:"translateY(-50%)",
-                  width:11, height:11, color:T.textMuted, pointerEvents:"none",
+                  position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",
+                  width: 11, height: 11, color: T.textMuted, pointerEvents: "none",
                 }} />
                 <input placeholder="Nom de l'élève…" value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={(e) => e.key==="Enter" && fetchGrades()}
+                  onChange={e => setSearch(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && fetchGrades()}
                   style={{
-                    width:"100%", boxSizing:"border-box",
-                    paddingLeft:30, paddingRight:12, paddingTop:8, paddingBottom:8,
-                    fontSize:12, borderRadius:10, outline:"none",
-                    background:T.inputBg, color:T.textPrimary,
-                    border:`1.5px solid ${T.inputBorder}`, transition:"all .15s",
-                    fontFamily:"'Plus Jakarta Sans', sans-serif",
+                    width: "100%", boxSizing: "border-box",
+                    paddingLeft: 30, paddingRight: 12, paddingTop: 9, paddingBottom: 9,
+                    fontSize: 12, fontWeight: 500, borderRadius: 10, outline: "none",
+                    background: T.inputBg, color: T.textPrimary,
+                    border: `1.5px solid ${T.inputBorder}`, transition: "all .15s",
                   }}
-                  onFocus={(e) => { e.target.style.borderColor=COL.from; e.target.style.boxShadow=`0 0 0 3px ${COL.from}22`; }}
-                  onBlur={(e)  => { e.target.style.borderColor=T.inputBorder; e.target.style.boxShadow="none"; }}
+                  onFocus={e => { e.target.style.borderColor = COL.from; e.target.style.boxShadow = `0 0 0 3px ${COL.from}20`; }}
+                  onBlur={e  => { e.target.style.borderColor = T.inputBorder; e.target.style.boxShadow = "none"; }}
                 />
               </div>
             </div>
+
+            {/* Classe */}
             <div>
-              <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
-                letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>Classe</p>
-              <Sel icon={FaLayerGroup} value={filters.school_class}
-                onChange={(e) => setF("school_class", e.target.value)}>
+              <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".08em", color: T.textMuted, marginBottom: 5 }}>Classe</p>
+              <Sel icon={FaLayerGroup} value={filters.school_class} T={T}
+                onChange={e => setF("school_class", e.target.value)}>
                 <option value="">Toutes les classes</option>
-                {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </Sel>
             </div>
+
+            {/* Élève */}
             <div>
-              <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
-                letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>
-                Élève {loadingStudents && (
-                  <span style={{ color:COL.from, display:"inline-block", animation:"spin 1s linear infinite" }}>↻</span>
-                )}
+              <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".08em", color: T.textMuted, marginBottom: 5 }}>
+                Élève{loadingStudents && <span style={{ color: COL.from, marginLeft: 4 }}>↻</span>}
               </p>
-              <Sel icon={FaUserGraduate} value={filters.student}
-                onChange={(e) => setF("student", e.target.value)}
-                disabled={!filters.school_class && students.length===0}>
+              <Sel icon={FaUserGraduate} value={filters.student} T={T}
+                disabled={!filters.school_class && !students.length}
+                onChange={e => setF("student", e.target.value)}>
                 <option value="">
                   {filters.school_class
                     ? (loadingStudents ? "Chargement…" : "Tous les élèves")
                     : "Choisir une classe"}
                 </option>
-                {students.map((s) => <option key={s.id} value={s.id}>{studentLabel(s)}</option>)}
+                {students.map(s => <option key={s.id} value={s.id}>{studentLabel(s)}</option>)}
               </Sel>
             </div>
+
+            {/* Matière */}
             <div>
-              <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
-                letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>Matière</p>
-              <Sel icon={FaBookOpen} value={filters.subject}
-                onChange={(e) => setF("subject", e.target.value)}>
+              <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".08em", color: T.textMuted, marginBottom: 5 }}>Matière</p>
+              <Sel icon={FaBookOpen} value={filters.subject} T={T}
+                onChange={e => setF("subject", e.target.value)}>
                 <option value="">Toutes les matières</option>
-                {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </Sel>
             </div>
+
+            {/* Trimestre */}
             <div>
-              <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
-                letterSpacing:"0.08em", color:T.textMuted, marginBottom:5 }}>Trimestre</p>
-              <Sel value={filters.term} onChange={(e) => setF("term", e.target.value)}>
+              <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".08em", color: T.textMuted, marginBottom: 5 }}>Trimestre</p>
+              <Sel value={filters.term} T={T} onChange={e => setF("term", e.target.value)}>
                 <option value="">Tous</option>
-                {TERMS.map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}
+                {["T1","T2","T3"].map(t => <option key={t} value={t}>{t}</option>)}
               </Sel>
             </div>
-            <button onClick={() => fetchGrades()} style={{
-              display:"flex", alignItems:"center", justifyContent:"center", gap:7,
-              padding:"9px 14px", borderRadius:10, border:"none", cursor:"pointer",
-              fontSize:12, fontWeight:800, color:"#fff",
-              background:`linear-gradient(135deg,${COL.from},${COL.to})`,
-              boxShadow:`0 4px 12px ${COL.shadow}`,
-            }}>
-              <FaSearch style={{ width:11,height:11 }} /> Filtrer
+
+            {/* Bouton filtrer */}
+            <button onClick={fetchGrades} disabled={loadingGrades}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                padding: "9px 14px", borderRadius: 10, border: "none",
+                cursor: loadingGrades ? "not-allowed" : "pointer",
+                fontSize: 12, fontWeight: 800, color: "#fff",
+                background: loadingGrades ? T.textMuted : `linear-gradient(135deg,${COL.from},${COL.to})`,
+                boxShadow: loadingGrades ? "none" : `0 4px 12px ${COL.shadow}`,
+                transition: "all .2s",
+              }}>
+              {loadingGrades
+                ? <FaSyncAlt style={{ width: 11, height: 11, animation: "spin 1s linear infinite" }} />
+                : <FaSearch  style={{ width: 11, height: 11 }} />}
+              {loadingGrades ? "…" : "Filtrer"}
             </button>
           </div>
         </div>
 
-        {/* STATS */}
+        {/* ═══ STATS ═══ */}
         {stats && (
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10, marginBottom:16 }}>
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(3,1fr)",
+            gap: 10, marginBottom: 16,
+          }}>
             {[
-              { label:"Notes affichées",  val:grades.length,  sub:"résultats", color:COL.from },
-              { label:"Moyenne générale", val:stats.mean,     sub:"sur 20",    color:parseFloat(stats.mean)>=10?COL.from:"#ef4444" },
-              { label:"Taux de réussite",
-                val:`${Math.round(stats.passing/stats.total*100)}%`,
-                sub:`${stats.passing}/${stats.total} élèves`, color:COL.from },
-            ].map(({ label, val, sub, color }, i) => (
+              { label: "Notes affichées",  val: grades.length,          sub: "résultats",       col: COL.from },
+              { label: "Moyenne générale", val: stats.mean,             sub: "sur 20",           col: parseFloat(stats.mean) >= 10 ? COL.from : "#ef4444" },
+              { label: "Taux de réussite", val: `${Math.round(stats.passing / stats.total * 100)}%`, sub: `${stats.passing}/${stats.total} élèves`, col: COL.from },
+            ].map(({ label, val, sub, col }, i) => (
               <div key={i} style={{
-                borderRadius:14, padding:"12px 16px",
-                background:T.cardBg, border:`1.5px solid ${T.cardBorder}`, boxShadow:T.cardShadow,
-                animation:`fadeUp .3s ease-out ${i*60}ms both`,
+                borderRadius: 14, padding: "12px 16px",
+                background: T.cardBg, border: `1.5px solid ${T.cardBorder}`,
+                boxShadow: T.cardShadow,
+                animation: `fadeUp .3s ease-out ${i * 60}ms both`,
               }}>
-                <p style={{ fontSize:10, fontWeight:800, textTransform:"uppercase",
-                  letterSpacing:"0.08em", color:T.textMuted, marginBottom:4 }}>{label}</p>
-                <p style={{ fontSize:22, fontWeight:900, color, lineHeight:1 }}>{val}</p>
-                <p style={{ fontSize:10, color:T.textMuted, marginTop:2 }}>{sub}</p>
+                <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".08em", color: T.textMuted, marginBottom: 4 }}>{label}</p>
+                <p style={{ fontSize: 22, fontWeight: 900, color: col, lineHeight: 1 }}>{val}</p>
+                <p style={{ fontSize: 10, color: T.textMuted, marginTop: 2 }}>{sub}</p>
               </div>
             ))}
           </div>
         )}
 
-        {/* LAYOUT FORM + RÉSULTATS */}
+        {/* ═══ LAYOUT FORMULAIRE + RÉSULTATS ═══ */}
         <div style={{
-          display:"grid",
-          gridTemplateColumns: isNarrow ? "1fr" : "300px 1fr",
-          gap:16, alignItems:"start",
+          display: "grid",
+          gridTemplateColumns: narrow ? "1fr" : "290px 1fr",
+          gap: 16, alignItems: "start",
         }}>
-          {/* FORMULAIRE */}
-          <div style={{
-            borderRadius:16, overflow:"hidden",
-            position: isNarrow ? "relative" : "sticky", top:76,
-            background:T.cardBg,
-            border:`1.5px solid ${isLocked ? "#f59e0b55" : isEditing ? "#f59e0b88" : T.cardBorder}`,
-            boxShadow: isLocked ? "0 4px 20px #f59e0b18" : isEditing ? "0 4px 20px #f59e0b22" : T.cardShadow,
-            transition:"border-color .3s, box-shadow .3s",
-          }}>
-            <div style={{
-              height:4, transition:"background .3s",
-              background: isLocked
-                ? "linear-gradient(90deg,#f59e0b,#f97316)"
-                : isEditing
-                  ? "linear-gradient(90deg,#f59e0b,#f97316)"
-                  : `linear-gradient(90deg,${COL.from},${COL.to})`,
-            }} />
 
-            <div style={{
-              padding:"12px 16px", borderBottom:`1px solid ${T.divider}`,
-              display:"flex", alignItems:"center", justifyContent:"space-between",
-              background: isLocked
-                ? (dark?"rgba(245,158,11,0.06)":"#fffbf0")
-                : isEditing ? (dark?"rgba(245,158,11,0.08)":"#fffbeb") : "transparent",
-              transition:"background .3s",
-            }}>
-              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          {/* ─── PANNEAU SAISIE / LECTURE ─── */}
+          {(() => {
+            const panelIsLocked = isLocked || yearIsClosed;
+            const allSelected   = !!(form.student_id && form.subject_id && form.term);
+            const hasGrade      = !!currentGrade;
+            const inRead        = panelMode === "read";
+
+            const accentBar = panelIsLocked
+              ? "linear-gradient(90deg,#f59e0b,#f97316)"
+              : inRead && hasGrade
+                ? `linear-gradient(90deg,${COL.from},${COL.to})`
+                : "linear-gradient(90deg,#6366f1,#8b5cf6)";
+
+            return (
+              <div style={{
+                borderRadius: 16, overflow: "hidden",
+                position: narrow ? "relative" : "sticky", top: 72,
+                background: T.cardBg,
+                border: `1.5px solid ${panelIsLocked ? "#f59e0b55" : T.cardBorder}`,
+                boxShadow: T.cardShadow,
+                transition: "all .25s",
+              }}>
+                <div style={{ height: 4, background: accentBar }} />
+
+                {/* ── En-tête ── */}
                 <div style={{
-                  width:30, height:30, borderRadius:8, flexShrink:0,
-                  display:"flex", alignItems:"center", justifyContent:"center",
-                  background: isLocked
-                    ? "linear-gradient(135deg,#f59e0b,#f97316)"
-                    : isEditing
-                      ? "linear-gradient(135deg,#f59e0b,#f97316)"
-                      : `linear-gradient(135deg,${COL.from},${COL.to})`,
-                  boxShadow: (isLocked || isEditing) ? "0 3px 8px #f59e0b44" : `0 3px 8px ${COL.shadow}`,
+                  padding: "12px 16px", borderBottom: `1px solid ${T.divider}`,
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
                 }}>
-                  {isLocked ? <FaLock style={{ width:12,height:12,color:"#fff" }} />
-                    : isEditing ? <FaEdit style={{ width:12,height:12,color:"#fff" }} />
-                    : <FaPlus style={{ width:12,height:12,color:"#fff" }} />}
-                </div>
-                <div>
-                  <p style={{ fontSize:13, fontWeight:800, color:T.textPrimary }}>
-                    {isLocked ? "Trimestre verrouillé" : isEditing ? "Modifier la note" : "Nouvelle saisie"}
-                  </p>
-                  {/* Badge indiquant que des notes existantes ont été chargées */}
-                  {!isLocked && form.id && (
-                    <p style={{ fontSize:9, color:"#f59e0b", fontWeight:700, marginTop:1 }}>
-                      ✦ Notes existantes pré-chargées — modifiez puis enregistrez
-                    </p>
+                  <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                    <div style={{
+                      width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      background: panelIsLocked
+                        ? "linear-gradient(135deg,#f59e0b,#f97316)"
+                        : inRead
+                          ? `linear-gradient(135deg,${COL.from},${COL.to})`
+                          : "linear-gradient(135deg,#6366f1,#8b5cf6)",
+                      boxShadow: panelIsLocked ? "0 3px 8px #f59e0b44"
+                        : inRead ? `0 3px 8px ${COL.shadow}` : "0 3px 8px #6366f144",
+                    }}>
+                      {panelIsLocked
+                        ? <FaLock  style={{ width: 11, height: 11, color: "#fff" }} />
+                        : inRead
+                          ? <FaEye   style={{ width: 11, height: 11, color: "#fff" }} />
+                          : <FaEdit  style={{ width: 11, height: 11, color: "#fff" }} />}
+                    </div>
+                    <div>
+                      <p style={{ fontSize: 12, fontWeight: 800, color: T.textPrimary, margin: 0 }}>
+                        {panelIsLocked ? "Lecture seule" : inRead ? "Aperçu des notes" : "Saisie / Modification"}
+                      </p>
+                      {allSelected && hasGrade && (
+                        <p style={{ fontSize: 9, color: COL.from, fontWeight: 700, margin: 0, marginTop: 1 }}>
+                          ✦ Note existante chargée
+                        </p>
+                      )}
+                      {allSelected && !hasGrade && (
+                        <p style={{ fontSize: 9, color: "#6366f1", fontWeight: 700, margin: 0, marginTop: 1 }}>
+                          + Nouvelle note
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Bouton bascule lecture ↔ édition */}
+                  {allSelected && !panelIsLocked && (
+                    <button
+                      onClick={() => setPanelMode(m => m === "read" ? "edit" : "read")}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 5,
+                        padding: "5px 11px", borderRadius: 8, border: "none",
+                        cursor: "pointer", fontSize: 10, fontWeight: 800,
+                        transition: "all .15s",
+                        background: inRead
+                          ? "linear-gradient(135deg,#6366f1,#8b5cf6)"
+                          : (dark ? "rgba(255,255,255,.07)" : "#f8fafc"),
+                        color: inRead ? "#fff" : T.textSecondary,
+                        boxShadow: inRead ? "0 3px 10px #6366f144" : "none",
+                      }}>
+                      {inRead
+                        ? <><FaEdit style={{ width: 9, height: 9 }} /> Éditer</>
+                        : <><FaEye  style={{ width: 9, height: 9 }} /> Lecture</>}
+                    </button>
                   )}
-                  {!isLocked && !form.id && form.student_id && form.subject_id && loadingStudentGrades && (
-                    <p style={{ fontSize:9, color:T.textMuted, marginTop:1 }}>
-                      Chargement des notes existantes…
+                </div>
+
+                {/* ── Sélecteurs (toujours visibles) ── */}
+                <div style={{ padding: "14px 16px 0", display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div>
+                    <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em", color: T.textMuted, marginBottom: 4 }}>
+                      Classe <span style={{ fontWeight: 400, textTransform: "none" }}>(filtre élèves)</span>
                     </p>
-                  )}
+                    <Sel icon={FaLayerGroup} value={filters.school_class} T={T}
+                      onChange={e => setF("school_class", e.target.value)}>
+                      <option value="">— Choisir —</option>
+                      {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </Sel>
+                  </div>
+                  <div>
+                    <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em", color: T.textMuted, marginBottom: 4 }}>Élève *</p>
+                    <Sel icon={FaUserGraduate} value={form.student_id} T={T}
+                      disabled={students.length === 0}
+                      onChange={e => setForm(p => ({ ...p, student_id: e.target.value }))}>
+                      <option value="">
+                        {filters.school_class
+                          ? (loadingStudents ? "Chargement…" : students.length === 0 ? "Aucun élève" : "— Sélectionner —")
+                          : "Choisissez une classe"}
+                      </option>
+                      {students.map(s => <option key={s.id} value={s.id}>{studentLabel(s)}</option>)}
+                    </Sel>
+                  </div>
+                  <div>
+                    <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em", color: T.textMuted, marginBottom: 4 }}>Matière *</p>
+                    <Sel icon={FaBookOpen} value={form.subject_id} T={T}
+                      onChange={e => setForm(p => ({ ...p, subject_id: e.target.value }))}>
+                      <option value="">— Sélectionner —</option>
+                      {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </Sel>
+                  </div>
+                  <div>
+                    <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em", color: T.textMuted, marginBottom: 6 }}>Trimestre</p>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                      {["T1","T2","T3"].map(t => {
+                        const tc = TERM_COLORS[t]; const active = form.term === t;
+                        return (
+                          <button key={t} type="button" onClick={() => setForm(p => ({ ...p, term: t }))}
+                            style={{
+                              padding: "7px 4px", borderRadius: 9, border: "none",
+                              cursor: "pointer", fontSize: 11, fontWeight: 800, transition: "all .15s",
+                              background: active ? `linear-gradient(135deg,${tc.from},${tc.to})` : (dark ? "rgba(255,255,255,.06)" : "#f8fafc"),
+                              color: active ? "#fff" : T.textMuted,
+                              boxShadow: active ? `0 3px 10px ${tc.from}55` : "none",
+                              transform: active ? "translateY(-1px)" : "none",
+                            }}>{t}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
-              </div>
-              {isEditing && !isLocked && (
-                <button onClick={() => setForm(EMPTY_FORM)} style={{
-                  display:"flex", alignItems:"center", gap:5, padding:"4px 9px", borderRadius:7,
-                  border:`1px solid #f59e0b44`, background:"transparent",
-                  cursor:"pointer", fontSize:10, fontWeight:700, color:"#f59e0b",
-                }}>
-                  <FaEraser style={{ width:9,height:9 }} /> Annuler
-                </button>
-              )}
-            </div>
 
-            <div style={{
-              padding:"14px 16px", display:"flex", flexDirection:"column", gap:12,
-              opacity: isLocked ? 0.6 : 1,
-              pointerEvents: isLocked ? "none" : "auto",
-              transition:"opacity .3s",
-            }}>
-              <div>
-                <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
-                  letterSpacing:"0.07em", color:T.textMuted, marginBottom:4 }}>
-                  Classe <span style={{ fontWeight:400, textTransform:"none" }}>(pour filtrer les élèves)</span>
-                </p>
-                <Sel icon={FaLayerGroup} value={filters.school_class}
-                  onChange={(e) => setF("school_class", e.target.value)}>
-                  <option value="">— Sélectionner une classe —</option>
-                  {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </Sel>
-              </div>
-              <div>
-                <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
-                  letterSpacing:"0.07em", color:T.textMuted, marginBottom:4 }}>Élève *</p>
-                <Sel icon={FaUserGraduate} value={form.student_id}
-                  onChange={(e) => {
-                    const sid = e.target.value;
-                    const existing = sid && form.subject_id
-                      ? studentGradesMap[String(form.subject_id)]
-                      : null;
-                    setForm((p) => ({
-                      ...p,
-                      student_id: sid,
-                      id:              existing?.id ?? null,
-                      interrogation1:  existing?.interrogation1 ?? "",
-                      interrogation2:  existing?.interrogation2 ?? "",
-                      interrogation3:  existing?.interrogation3 ?? "",
-                      devoir1:         existing?.devoir1 ?? "",
-                      devoir2:         existing?.devoir2 ?? "",
-                    }));
-                  }}
-                  disabled={students.length===0}>
-                  <option value="">
-                    {filters.school_class
-                      ? (loadingStudents ? "Chargement…"
-                          : students.length===0 ? "Aucun élève" : "— Sélectionner —")
-                      : "Choisissez une classe"}
-                  </option>
-                  {students.map((s) => <option key={s.id} value={s.id}>{studentLabel(s)}</option>)}
-                </Sel>
-              </div>
-              <div>
-                <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
-                  letterSpacing:"0.07em", color:T.textMuted, marginBottom:4 }}>Matière *</p>
-                <Sel icon={FaBookOpen} value={form.subject_id}
-                  onChange={(e) => {
-                    const subId = e.target.value;
-                    const existing = subId && form.student_id
-                      ? studentGradesMap[String(subId)]
-                      : null;
-                    setForm((p) => ({
-                      ...p,
-                      subject_id: subId,
-                      id:              existing?.id ?? null,
-                      interrogation1:  existing?.interrogation1 ?? "",
-                      interrogation2:  existing?.interrogation2 ?? "",
-                      interrogation3:  existing?.interrogation3 ?? "",
-                      devoir1:         existing?.devoir1 ?? "",
-                      devoir2:         existing?.devoir2 ?? "",
-                    }));
-                  }}>
-                  <option value="">— Sélectionner —</option>
-                  {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </Sel>
-              </div>
-              <div>
-                <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
-                  letterSpacing:"0.07em", color:T.textMuted, marginBottom:6 }}>Trimestre</p>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
-                  {TERMS.map(({ v }) => {
-                    const tc = TERM_COLORS[v];
-                    const active = form.term === v;
-                    return (
-                      <button key={v} type="button" onClick={() => setForm((p) => ({ ...p, term: v }))}
-                        style={{
-                          padding:"7px 4px", borderRadius:9, border:"none", cursor:"pointer",
-                          fontSize:11, fontWeight:800, transition:"all .15s",
-                          background: active ? `linear-gradient(135deg,${tc.from},${tc.to})` : (dark?"rgba(255,255,255,.05)":"#f8fafc"),
-                          color: active ? "#fff" : T.textMuted,
-                          boxShadow: active ? `0 3px 10px ${tc.from}55` : "none",
-                          transform: active ? "translateY(-1px)" : "none",
-                        }}>{v}</button>
-                    );
-                  })}
-                </div>
-              </div>
+                {/* ── Zone notes : lecture ou édition ── */}
+                {allSelected && (
+                  <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div style={{ height: 1, background: T.divider }} />
 
-              <div style={{ height:1, background:T.divider }} />
+                    {/* MODE LECTURE */}
+                    {inRead && (
+                      <>
+                        {/* Interrogations */}
+                        <div>
+                          <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em", color: "#6366f1", marginBottom: 8 }}>
+                            Interrogations
+                          </p>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                            {["interrogation1","interrogation2","interrogation3"].map((f, i) => (
+                              <GradeBadge key={f} label={`Int. ${i+1}`} accent="#6366f1"
+                                value={currentGrade?.[f] ?? ""} T={T} />
+                            ))}
+                          </div>
+                        </div>
+                        {/* Devoirs */}
+                        <div>
+                          <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em", color: "#f97316", marginBottom: 8 }}>
+                            Devoirs
+                          </p>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                            {["devoir1","devoir2"].map((f, i) => (
+                              <GradeBadge key={f} label={`Dev. ${i+1}`} accent="#f97316"
+                                value={currentGrade?.[f] ?? ""} T={T} />
+                            ))}
+                          </div>
+                        </div>
+                        {/* Moyennes calculées */}
+                        {currentGrade?.average_subject != null && (
+                          <>
+                            <div style={{ height: 1, background: T.divider }} />
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                              {[
+                                { label: "Moy. Interros", val: currentGrade.average_interro, accent: "#6366f1" },
+                                { label: "Moy. Matière",  val: currentGrade.average_subject, accent: COL.from  },
+                              ].map(({ label, val, accent }) => {
+                                const n   = parseFloat(val);
+                                const col = !isNaN(n) ? gradeColor(n) : null;
+                                return (
+                                  <div key={label} style={{ textAlign: "center" }}>
+                                    <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em", color: accent, marginBottom: 4 }}>{label}</p>
+                                    <div style={{
+                                      padding: "8px 4px", borderRadius: 10, fontSize: 20, fontWeight: 900,
+                                      color: col || T.textMuted, lineHeight: 1,
+                                      background: col ? `${col}12` : T.inputBg,
+                                      border: `1.5px solid ${col ? `${col}33` : T.divider}`,
+                                    }}>
+                                      {!isNaN(n) ? n.toFixed(2) : "—"}
+                                      {!isNaN(n) && <span style={{ fontSize: 11, fontWeight: 500, color: T.textMuted }}>/20</span>}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
+                        {!hasGrade && (
+                          <div style={{
+                            padding: "16px 12px", borderRadius: 12, textAlign: "center",
+                            background: dark ? "rgba(99,102,241,.07)" : "#f5f3ff",
+                            border: "1.5px dashed #6366f133",
+                          }}>
+                            <p style={{ fontSize: 12, fontWeight: 700, color: "#6366f1", marginBottom: 4 }}>
+                              Aucune note enregistrée
+                            </p>
+                            <p style={{ fontSize: 10, color: T.textMuted }}>
+                              Cliquez sur <strong>Éditer</strong> pour saisir.
+                            </p>
+                          </div>
+                        )}
+                        {/* Bouton Éditer (mode lecture, non verrouillé) */}
+                        {!panelIsLocked && (
+                          <button onClick={() => setPanelMode("edit")}
+                            style={{
+                              width: "100%", padding: "10px 16px", borderRadius: 12, border: "none",
+                              display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+                              cursor: "pointer", fontSize: 12, fontWeight: 800, color: "#fff",
+                              background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
+                              boxShadow: "0 4px 14px #6366f144",
+                            }}>
+                            <FaEdit style={{ width: 11, height: 11 }} />
+                            {hasGrade ? "Modifier les notes" : "Saisir les notes"}
+                          </button>
+                        )}
+                      </>
+                    )}
 
-              <div>
-                <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
-                  letterSpacing:"0.07em", color:"#6366f1", marginBottom:6 }}>
-                  Interrogations <span style={{ fontWeight:500, color:T.textMuted }}>(coef. 1)</span>
-                </p>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
-                  {["interrogation1","interrogation2","interrogation3"].map((field, i) => (
-                    <GradeInput key={field} label={`Int. ${i+1}`} accent="#6366f1"
-                      value={form[field]}
-                      onChange={(e) => setForm((p) => ({ ...p, [field]: e.target.value }))} />
-                  ))}
-                </div>
+                    {/* MODE ÉDITION */}
+                    {!inRead && (
+                      <>
+                        <div>
+                          <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em", color: "#6366f1", marginBottom: 6 }}>
+                            Interrogations <span style={{ color: T.textMuted, fontWeight: 500 }}>(coef. 1)</span>
+                          </p>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                            {["interrogation1","interrogation2","interrogation3"].map((f, i) => (
+                              <GradeInput key={f} label={`Int. ${i+1}`} accent="#6366f1"
+                                value={form[f]}
+                                onChange={e => setForm(p => ({ ...p, [f]: e.target.value }))} />
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em", color: "#f97316", marginBottom: 6 }}>
+                            Devoirs <span style={{ color: T.textMuted, fontWeight: 500 }}>(coef. 2)</span>
+                          </p>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                            {["devoir1","devoir2"].map((f, i) => (
+                              <GradeInput key={f} label={`Dev. ${i+1}`} accent="#f97316"
+                                value={form[f]}
+                                onChange={e => setForm(p => ({ ...p, [f]: e.target.value }))} />
+                            ))}
+                          </div>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 4 }}>
+                          <button onClick={() => setPanelMode("read")}
+                            style={{
+                              padding: "10px 8px", borderRadius: 10, fontSize: 11, fontWeight: 800,
+                              border: `1.5px solid ${T.cardBorder}`, background: T.inputBg,
+                              color: T.textSecondary, cursor: "pointer",
+                              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                            }}>
+                            <FaEraser style={{ width: 10, height: 10 }} /> Annuler
+                          </button>
+                          <button onClick={handleSubmit} disabled={saving}
+                            style={{
+                              padding: "10px 8px", borderRadius: 10, border: "none",
+                              cursor: saving ? "not-allowed" : "pointer",
+                              fontSize: 11, fontWeight: 800, color: "#fff",
+                              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                              background: saving ? T.textMuted : `linear-gradient(135deg,${COL.from},${COL.to})`,
+                              boxShadow: saving ? "none" : `0 4px 14px ${COL.shadow}`,
+                              opacity: saving ? .7 : 1,
+                            }}>
+                            {saving
+                              ? <FaSyncAlt style={{ width: 10, height: 10, animation: "spin 1s linear infinite" }} />
+                              : <FaSave    style={{ width: 10, height: 10 }} />}
+                            {saving ? "Enreg…" : hasGrade ? "Mettre à jour" : "Enregistrer"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Invitation si sélections incomplètes */}
+                {!allSelected && (
+                  <div style={{ padding: "20px 16px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.6 }}>
+                      Sélectionnez un <strong>élève</strong>, une <strong>matière</strong> et un <strong>trimestre</strong> pour voir les notes existantes.
+                    </p>
+                  </div>
+                )}
               </div>
+            );
+          })()}
 
-              <div>
-                <p style={{ fontSize:9, fontWeight:800, textTransform:"uppercase",
-                  letterSpacing:"0.07em", color:"#f97316", marginBottom:6 }}>
-                  Devoirs <span style={{ fontWeight:500, color:T.textMuted }}>(coef. 2)</span>
-                </p>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
-                  {["devoir1","devoir2"].map((field, i) => (
-                    <GradeInput key={field} label={`Dev. ${i+1}`} accent="#f97316"
-                      value={form[field]}
-                      onChange={(e) => setForm((p) => ({ ...p, [field]: e.target.value }))} />
-                  ))}
-                </div>
-              </div>
 
-              {/* Submit */}
-              {isLocked ? (
-                <div style={{
-                  marginTop:4, width:"100%", display:"flex", alignItems:"center",
-                  justifyContent:"center", gap:8, padding:"11px 16px",
-                  borderRadius:12, fontSize:13, fontWeight:800, color:"#f59e0b",
-                  background:"#f59e0b18", border:"1.5px solid #f59e0b33",
-                }}>
-                  <FaLock style={{ width:13,height:13 }} /> Verrouillé
-                </div>
-              ) : (
-                <button onClick={handleSubmit} disabled={saving} style={{
-                  marginTop:4, width:"100%", display:"flex", alignItems:"center",
-                  justifyContent:"center", gap:8, padding:"11px 16px",
-                  borderRadius:12, border:"none", cursor: saving ? "not-allowed" : "pointer",
-                  fontSize:13, fontWeight:800, color:"#fff", transition:"all .2s",
-                  background: saving ? T.textMuted : isEditing
-                    ? "linear-gradient(135deg,#f59e0b,#f97316)"
-                    : `linear-gradient(135deg,${COL.from},${COL.to})`,
-                  boxShadow: saving ? "none" : isEditing ? "0 4px 16px #f59e0b44" : `0 4px 16px ${COL.shadow}`,
-                }}>
-                  {saving
-                    ? <FaSyncAlt style={{ width:13,height:13, animation:"spin 1s linear infinite" }} />
-                    : <FaSave style={{ width:13,height:13 }} />}
-                  {saving ? "Enregistrement…" : isEditing ? "Mettre à jour" : "Enregistrer la note"}
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* RÉSULTATS */}
+          {/* ─── RÉSULTATS ─── */}
           <div>
             {loadingGrades ? (
-              <div style={{ display:"grid", gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr", gap:12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr", gap: 12 }}>
                 {[...Array(4)].map((_, i) => (
                   <div key={i} style={{
-                    height:160, borderRadius:16,
-                    background:T.cardBg, border:`1.5px solid ${T.cardBorder}`,
-                    animation:"pulse 1.5s ease-in-out infinite",
+                    height: 166, borderRadius: 16,
+                    background: T.cardBg, border: `1.5px solid ${T.cardBorder}`,
+                    animation: "pulse 1.6s ease-in-out infinite",
                   }} />
                 ))}
               </div>
             ) : grades.length === 0 ? (
               <div style={{
-                borderRadius:16, padding:"60px 24px", textAlign:"center",
-                background:T.cardBg, border:`2px dashed ${COL.from}44`,
-                animation:"fadeUp .3s ease-out",
+                borderRadius: 18, padding: "60px 24px", textAlign: "center",
+                background: T.cardBg, border: `2px dashed ${COL.from}33`,
+                animation: "fadeUp .3s ease-out",
               }}>
                 <div style={{
-                  width:64, height:64, borderRadius:20, margin:"0 auto 16px",
-                  display:"flex", alignItems:"center", justifyContent:"center",
-                  background:`linear-gradient(135deg,${COL.from}22,${COL.to}11)`,
+                  width: 64, height: 64, borderRadius: 20, margin: "0 auto 16px",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: `${COL.from}14`,
                 }}>
-                  <FaBookOpen style={{ width:26,height:26,color:COL.from,opacity:.5 }} />
+                  <FaBookOpen style={{ width: 26, height: 26, color: COL.from, opacity: .45 }} />
                 </div>
-                <p style={{ fontSize:16, fontWeight:800, color:T.textSecondary }}>Aucune note trouvée</p>
-                <p style={{ fontSize:12, color:T.textMuted, marginTop:6 }}>
-                  Ajustez les filtres ou saisissez une nouvelle note via le formulaire.
+                <p style={{ fontSize: 16, fontWeight: 800, color: T.textSecondary }}>
+                  Aucune note trouvée
+                </p>
+                <p style={{ fontSize: 12, color: T.textMuted, marginTop: 6, lineHeight: 1.6 }}>
+                  Choisissez une classe et un élève, puis cliquez sur <strong>Filtrer</strong>.<br />
+                  Ou utilisez le formulaire pour saisir une nouvelle note.
                 </p>
               </div>
             ) : (
-              <div style={{ display:"grid", gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr", gap:12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr", gap: 12 }}>
                 {grades.map((g, i) => (
                   <GradeCard key={g.id} grade={g}
-                    onEdit={handleEdit}
-                    onDelete={handleDeleteRequest}
-                    animDelay={i * 30}
-                    isLocked={isLocked} />
+                    onEdit={handleEdit} onDelete={handleDeleteRequest}
+                    animDelay={i * 25} isLocked={isLocked || yearIsClosed}
+                    T={T} dark={dark} />
                 ))}
               </div>
             )}
@@ -1143,12 +1348,9 @@ const GradesInner = () => {
 
       <ConfirmDialog
         open={confirm.open}
-        title="Supprimer cette note ?"
-        message="Cette action est irréversible. La note sera définitivement supprimée."
         onConfirm={handleDeleteConfirm}
-        onCancel={() => setConfirm({ open:false, id:null })}
+        onCancel={() => setConfirm({ open: false, id: null })}
       />
-
       <Toast msg={msg} onClose={() => setMsg(null)} />
 
       <style>{BASE_KEYFRAMES}{`
@@ -1157,15 +1359,15 @@ const GradesInner = () => {
       `}</style>
     </div>
   );
-};
+}
 
-/* ROOT */
-const Grades = () => {
+/* ─── Root ───────────────────────────────────────────────────────────────── */
+export default function Grades() {
   const [dark, setDark] = useState(() => {
     try { return localStorage.getItem("scol360_dark") === "true"; } catch { return false; }
   });
   const toggle = useCallback(() => {
-    setDark((v) => {
+    setDark(v => {
       const n = !v;
       try { localStorage.setItem("scol360_dark", String(n)); } catch {}
       return n;
@@ -1176,6 +1378,4 @@ const Grades = () => {
       <GradesInner />
     </ThemeCtx.Provider>
   );
-};
-
-export default Grades;
+}
