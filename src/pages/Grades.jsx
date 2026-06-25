@@ -941,7 +941,8 @@ function GradesInner() {
               <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".08em", color: T.textMuted, marginBottom: 5 }}>Trimestre</p>
               <Sel value={filters.term} T={T} onChange={e => setF("term", e.target.value)}>
                 <option value="">Tous</option>
-                {["T1","T2","T3"].map(t => <option key={t} value={t}>{t}</option>)}
+                {Array.from({ length: selectedYear?.nb_terms ?? 3 }, (_, i) => `T${i + 1}`)
+                  .map(t => <option key={t} value={t}>{t}</option>)}
               </Sel>
             </div>
 
@@ -1117,9 +1118,9 @@ function GradesInner() {
                   </div>
                   <div>
                     <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em", color: T.textMuted, marginBottom: 6 }}>Trimestre</p>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-                      {["T1","T2","T3"].map(t => {
-                        const tc = TERM_COLORS[t]; const active = form.term === t;
+                    <div style={{ display: "grid", gridTemplateColumns: `repeat(${selectedYear?.nb_terms ?? 3}, 1fr)`, gap: 6 }}>
+                      {Array.from({ length: selectedYear?.nb_terms ?? 3 }, (_, i) => `T${i + 1}`).map(t => {
+                        const tc = TERM_COLORS[t] ?? TERM_COLORS.T1; const active = form.term === t;
                         return (
                           <button key={t} type="button" onClick={() => setForm(p => ({ ...p, term: t }))}
                             style={{

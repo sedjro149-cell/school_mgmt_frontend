@@ -199,7 +199,9 @@ const StudentsInner = () => {
   const [frozenClass,  setFrozenClass]  = useState("");
   const [loadingRoster, setLoadingRoster] = useState(false);
 
-  const isFrozenView = selectedYear !== null && selectedYear.is_closed;
+  // Toute année explicitement sélectionnée active la vue figée,
+  // qu'elle soit clôturée ou non. "Année en cours" (null) = vue live.
+  const isFrozenView = selectedYear !== null;
 
   // Classes disponibles dans la vue figée
   const frozenClasses  = frozenRoster?.classes ?? [];
@@ -435,7 +437,7 @@ const StudentsInner = () => {
                   const yr = allYears.find(y => String(y.id) === e.target.value) ?? null;
                   setSelectedYear(yr);
                   setFrozenClass(""); setFrozenRoster(null);
-                  if (yr?.is_closed) fetchFrozenRoster(yr.id);
+                  if (yr) fetchFrozenRoster(yr.id);
                 }}
                 className="w-full appearance-none pl-4 pr-9 py-2.5 text-sm rounded-xl outline-none transition-all"
                 style={{
@@ -507,10 +509,12 @@ const StudentsInner = () => {
               <span style={{ fontSize:16 }}>📂</span>
               <div>
                 <p style={{ fontSize:12, fontWeight:700, color:"#b45309", margin:0 }}>
-                  Vue archivée — Année {selectedYear.label} (clôturée)
+                  Vue archivée — Année {selectedYear.label}{selectedYear.is_closed ? " (clôturée)" : " (consultation)"}
                 </p>
                 <p style={{ fontSize:11, color:"#92400e", margin:0 }}>
-                  Liste figée au moment de la clôture. Toute modification est impossible.
+                  {selectedYear.is_closed
+                    ? 'Liste figée au moment de la clôture. Toute modification est impossible.'
+                    : 'Vue archivée pour cette année scolaire. Les modifications restent possibles depuis la vue en cours.'}
                 </p>
               </div>
             </div>
