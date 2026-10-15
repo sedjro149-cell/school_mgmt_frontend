@@ -539,8 +539,8 @@ const GenerateTimetableInner = () => {
   /* ── Generation ── */
   const [running,    setRunning]    = useState(false);
   const [resolving,  setResolving]  = useState(false);
-  const [dryRun,     setDryRun]     = useState(true);
-  const [persist,    setPersist]    = useState(false);
+  const [dryRun,     setDryRun]     = useState(false);  // défaut : génération réelle
+  const [persist,    setPersist]    = useState(true);   // défaut : sauvegarde en base
   const [report,     setReport]     = useState(null);
   const [msg,        setMsg]        = useState(null);
 
@@ -601,7 +601,7 @@ const GenerateTimetableInner = () => {
         dry_run: !!dryRun, persist: !!persist,
       });
       setReport(res);
-      if (persist || !dryRun) await refreshData();
+      if (!dryRun && persist) await refreshData();  // ne rafraîchit que si vraiment persisté
       toast("success", dryRun ? "Simulation terminée." : "Emploi du temps généré.");
     } catch (err) {
       toast("error", err?.message || "Erreur lors de la génération.");
